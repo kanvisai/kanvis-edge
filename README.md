@@ -128,6 +128,8 @@ curl -H "X-API-Key: KEY" http://127.0.0.1:8000/api/v1/gateway/status
 
 En `cameras.json` → `output.webrtc`: `enabled`, `mode`, `signaling_url` (WHIP), `stun_urls`, `rewind_offset_sec`.
 
+**Panel web:** pestaña *Probar* → *Conectar WebRTC* (visor WHEP con FPS, resolución, ingesta y búfer en tiempo real).
+
 La pista WebRTC decodifica H.264 solo en salida; el búfer RAM sigue en codec copy.
 
 ### Pruebas de cámara (Fase 3)

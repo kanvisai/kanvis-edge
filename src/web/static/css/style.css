@@ -260,3 +260,81 @@ legend {
   padding: 0 0.5rem;
   color: var(--muted);
 }
+
+.webrtc-panel {
+  margin: 1.25rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.webrtc-panel h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#webrtc-live-badge.ok {
+  background: rgba(34, 197, 94, 0.25);
+  color: var(--ok);
+}
+
+.webrtc-hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0 0 1rem;
+}
+
+.webrtc-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(200px, 320px);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .webrtc-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.webrtc-video-wrap {
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  aspect-ratio: 16 / 9;
+}
+
+#webrtc-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.stat-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}

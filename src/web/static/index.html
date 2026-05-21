@@ -124,6 +124,40 @@
       <input id="test-camera-id" placeholder="cam-01" />
       <label>Offset playback (s)</label>
       <input id="test-offset" type="number" value="3" step="0.1" min="0.1" max="120" />
+
+      <div id="webrtc-viewer-panel" class="webrtc-panel">
+        <h3>Visor WebRTC <span id="webrtc-live-badge" class="badge">OFF</span></h3>
+        <p class="webrtc-hint">
+          Vista previa vía WHEP (H.264 del búfer/ingesta). La cámara debe estar activa y con ingesta.
+          Marca <strong>Activar WebRTC</strong> al guardar si quieres persistir la opción.
+        </p>
+        <div class="webrtc-layout">
+          <div class="webrtc-video-wrap">
+            <video id="webrtc-video" playsinline muted autoplay></video>
+          </div>
+          <div class="stats-grid" aria-live="polite">
+            <div class="stat-item"><span class="stat-label">FPS pantalla</span><span class="stat-value" id="stat-display-fps">—</span></div>
+            <div class="stat-item"><span class="stat-label">FPS WebRTC</span><span class="stat-value" id="stat-rtc-fps">—</span></div>
+            <div class="stat-item"><span class="stat-label">Resolución</span><span class="stat-value" id="stat-resolution">—</span></div>
+            <div class="stat-item"><span class="stat-label">Frames decod.</span><span class="stat-value" id="stat-frames-decoded">—</span></div>
+            <div class="stat-item"><span class="stat-label">Caídos</span><span class="stat-value" id="stat-dropped">—</span></div>
+            <div class="stat-item"><span class="stat-label">Jitter</span><span class="stat-value" id="stat-jitter">—</span></div>
+            <div class="stat-item"><span class="stat-label">Recibido</span><span class="stat-value" id="stat-bytes-rx">—</span></div>
+            <div class="stat-item"><span class="stat-label">ICE</span><span class="stat-value" id="stat-ice">—</span></div>
+            <div class="stat-item"><span class="stat-label">Conexión</span><span class="stat-value" id="stat-connection">—</span></div>
+            <div class="stat-item"><span class="stat-label">Ingesta</span><span class="stat-value" id="stat-ingest">—</span></div>
+            <div class="stat-item"><span class="stat-label">Paquetes/s ingesta</span><span class="stat-value" id="stat-ingest-pps">—</span></div>
+            <div class="stat-item"><span class="stat-label">Búfer RAM</span><span class="stat-value" id="stat-buffer">—</span></div>
+            <div class="stat-item"><span class="stat-label">Rewind pend.</span><span class="stat-value" id="stat-rewind-pending">—</span></div>
+          </div>
+        </div>
+        <div class="actions">
+          <button type="button" id="btn-webrtc-connect">Conectar WebRTC</button>
+          <button type="button" class="secondary" id="btn-webrtc-disconnect" disabled>Desconectar</button>
+          <button type="button" class="secondary" id="btn-webrtc-rewind" disabled>Rewind (offset)</button>
+        </div>
+      </div>
+
       <div class="actions">
         <button type="button" id="btn-snap-source">Snapshot origen</button>
         <button type="button" id="btn-snap-relay">Snapshot relay</button>
@@ -151,6 +185,7 @@
   </div>
 
   <div id="toast" class="hidden"></div>
+  <script src="/static/js/webrtc-viewer.js"></script>
   <script src="/static/js/app.js"></script>
 </body>
 </html>

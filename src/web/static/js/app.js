@@ -68,6 +68,9 @@ async function checkSession() {
 }
 
 function logout() {
+  if (window.KanvisWebRtcViewer?.isConnected?.()) {
+    window.KanvisWebRtcViewer.disconnect(api).catch(() => {});
+  }
   setToken("");
   showApp(false);
 }
@@ -135,6 +138,9 @@ async function loadCameras() {
           : '<span class="badge warn">Sin vídeo</span>';
         statusHtml = `${conn} Búfer: ${st.buffer_span_seconds || 0}s / ${st.buffer_max_duration_seconds || 60}s`;
         if (st.relay?.running) statusHtml += ' <span class="badge ok">Relay ON</span>';
+        if (st.webrtc?.session?.connection_state === "connected") {
+          statusHtml += ' <span class="badge ok">WebRTC</span>';
+        }
       } catch {
         statusHtml = '<span class="badge err">Inactiva</span>';
       }
@@ -383,6 +389,56 @@ $("#btn-test-playback")?.addEventListener("click", async () => {
     a.click();
     toast("Descarga de stream iniciada");
   } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+$("#btn-webrtc-connect")?.addEventListener("click", async () => {
+  const id = $("#test-camera-id").value?.trim();
+  if (!id) return toast("Indica ID de cámara", true);
+  try {
+    logTest("WebRTC: negociando WHEP…");
+    await KanvisWebRtcViewer.connect(id, api);
+    const badge = $("#webrtc-live-badge");
+    badge.textContent = "LIVE";
+    badge.classList.add("ok");
+    logTest("WebRTC: conectado");
+    toast("Visor WebRTC conectado");
+  } catch (err) {
+    logTest("WebRTC: " + err.message);
+    toast(err.message, true);
+    await KanvisWebRtcViewer.disconnect(api).catch(() => {});
+    const badge = $("#webrtc-live-badge");
+    badge.textContent = "OFF";
+    badge.classList.remove("ok");
+  }
+});
+
+$("#btn-webrtc-disconnect")?.addEventListener("click", async () => {
+  try {
+    await KanvisWebRtcViewer.disconnect(api);
+    const badge = $("#webrtc-live-badge");
+    badge.textContent = "OFF";
+    badge.classList.remove("ok");
+    logTest("WebRTC desconectado");
+    toast("Visor cerrado");
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+$("#btn-webrtc-rewind")?.addEventListener("click", async () => {
+  const id = $("#test-camera-id").value?.trim();
+  const offset = parseFloat($("#test-offset").value) || 3;
+  if (!id || !KanvisWebRtcViewer.isConnected()) {
+    return toast("Conecta WebRTC antes de rewind", true);
+  }
+  try {
+    const r = await KanvisWebRtcViewer.rewind(id, offset, api);
+    logTest(`Rewind ${offset}s: ${r.packets_queued} paquetes`);
+    toast(`Rewind: ${r.packets_queued} paquetes en cola`);
+  } catch (err) {
+    logTest("Rewind: " + err.message);
     toast(err.message, true);
   }
 });
