@@ -1,0 +1,9 @@
+# Kanvis Edge — DHCP en interfaz AP
+interface=@WLAN_INTERFACE@
+bind-interfaces
+except-interface=lo
+dhcp-range=@DHCP_START@,@DHCP_END@,12h
+dhcp-option=option:router,@AP_IP@
+dhcp-option=option:dns-server,@AP_IP@
+log-queries
+log-dhcp

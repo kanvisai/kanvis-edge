@@ -1,0 +1,30 @@
+[Unit]
+Description=Kanvis Edge Video Gateway
+Documentation=https://github.com/kanvis/kanvis-edge
+After=network-online.target kanvis-network.service
+Wants=network-online.target
+# Si usas solo LAN sin AP, comenta la línea After=kanvis-network.service
+
+[Service]
+Type=simple
+User=kanvis
+Group=kanvis
+WorkingDirectory=/opt/kanvis-edge
+Environment=PYTHONPATH=/opt/kanvis-edge
+EnvironmentFile=-/opt/kanvis-edge/.env
+EnvironmentFile=-/etc/kanvis-edge/env
+ExecStart=/opt/kanvis-edge/.venv/bin/python -m src.main
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening ligero (ajusta si algo falla en tu hardware)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/kanvis-edge/config /opt/kanvis-edge/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

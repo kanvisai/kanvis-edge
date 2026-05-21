@@ -1,0 +1,17 @@
+[Unit]
+Description=Kanvis Edge — red de instalación (AP / LAN)
+Before=kanvis-edge.service
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/kanvis-edge/env
+EnvironmentFile=-/opt/kanvis-edge/.env
+ExecStart=/opt/kanvis-edge/scripts/kanvis-network.sh start
+ExecStop=/opt/kanvis-edge/scripts/kanvis-network.sh stop
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

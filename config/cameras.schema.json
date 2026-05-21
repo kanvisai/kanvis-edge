@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KanvisEdgeCameraInventory",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["camera_id", "source"],
+    "properties": {
+      "camera_id": { "type": "string" },
+      "enabled": { "type": "boolean", "default": true },
+      "label": { "type": "string" },
+      "source": {
+        "type": "object",
+        "required": ["host"],
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "integer", "default": 554 },
+          "username": { "type": "string" },
+          "password": { "type": "string" },
+          "path": { "type": "string" },
+          "transport": { "type": "string", "default": "tcp" },
+          "fps": { "type": "integer" },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" }
+        }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "protocol": { "enum": ["none", "rtsp", "webrtc"] },
+          "gateway": {
+            "type": "object",
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "access_mode": { "enum": ["direct", "gateway", "relay"] },
+              "path": { "type": "string" },
+              "source_on_demand": { "type": "boolean" }
+            }
+          },
+          "relay": {
+            "type": "object",
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "listen_host": { "type": "string" },
+              "listen_port": { "type": "integer" },
+              "path_suffix": { "type": "string" },
+              "iframe_interval_sec": { "type": "number" }
+            }
+          },
+          "webrtc": {
+            "type": "object",
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "signaling_url": { "type": "string" },
+              "room_id": { "type": "string" }
+            }
+          }
+        }
+      },
+      "buffer": {
+        "type": "object",
+        "properties": {
+          "duration_seconds": { "type": "number", "minimum": 1, "maximum": 300 },
+          "default_playback_offset_sec": { "type": "number" },
+          "event_pre_seconds": { "type": "number" },
+          "event_post_seconds": { "type": "number" }
+        }
+      }
+    }
+  }
+}

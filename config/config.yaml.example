@@ -1,0 +1,78 @@
+# Kanvis Edge Gateway — configuración global
+# Copiar a config/config.yaml
+
+gateway:
+  edge_api_host: "0.0.0.0"
+  edge_api_port: 8000
+  log_level: "INFO"
+
+buffer:
+  buffer_duration_seconds: 60.0
+  default_playback_offset_sec: 6.0
+  default_playback_test_offset_sec: 3.0
+  pre_buffer_seconds: 6.0
+  post_buffer_seconds: 24.0
+  stream_fps: 20
+  stream_width: 1280
+  stream_height: 720
+
+relay:
+  edge_rtsp_host: "0.0.0.0"
+  edge_rtsp_port: 8554
+  # Por cámara: output.relay en cameras.json (listen o push)
+
+# Fase 7 — proxy RTSP unificado (opcional; ver docs/RTSP_GATEWAY.md)
+rtsp_gateway:
+  rtsp_gateway_enabled: false
+  rtsp_gateway_listen_host: "0.0.0.0"
+  rtsp_gateway_port: 8554
+  rtsp_gateway_wan_port: 55422
+  mediamtx_binary: "mediamtx"
+  mediamtx_log_level: "info"
+
+rtsp_client:
+  ffmpeg_path: "ffmpeg"
+  ffmpeg_log_level: "warning"
+  relay_transcode_preset: "veryfast"
+  reconnect_base_delay: 1.0
+  reconnect_max_delay: 60.0
+
+webrtc:
+  webrtc_signaling_port: 8188
+  # Por cámara: output.webrtc (mode whep|whip, signaling_url, stun_urls)
+
+inventory:
+  camera_store_backend: "json"
+
+discovery:
+  discovery_enabled: false
+  discovery_subnet: "192.168.1.0/24"
+  discovery_interval_seconds: 300
+  rtsp_scan_ports: [554, 8554]
+
+security:
+  auth_mode: "api_key"
+  webui_username: "admin"
+  webui_token_expire_hours: 24
+
+ddns:
+  ddns_enabled: false
+  ddns_provider: "duckdns"
+  ddns_hostname: "mi-tienda"
+  ddns_interval_seconds: 300
+
+cloud:
+  cloud_report_enabled: false
+  cloud_report_url: "https://api.tu-nube.com/v1/edge/register-ip"
+  cloud_report_on_ip_change_only: true
+  device_id: "tienda-001"
+  wan_sync_interval_seconds: 0
+
+# Matriz de puertos: docs/PORT_FORWARDING.md
+
+network:
+  network_mode: "ap_and_lan"
+  wlan_interface: "wlan0"
+  lan_interface: "eth0"
+  ap_ssid_prefix: "kanvis"
+  ap_ip: "192.168.192.192"

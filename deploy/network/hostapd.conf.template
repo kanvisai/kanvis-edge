@@ -1,0 +1,14 @@
+# Kanvis Edge — punto de acceso de instalación
+# Generado por scripts/kanvis-network.sh — no editar a mano
+
+interface=@WLAN_INTERFACE@
+driver=nl80211
+ssid=@AP_SSID@
+hw_mode=g
+channel=@AP_CHANNEL@
+ieee80211n=1
+wmm_enabled=1
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+@WPA_BLOCK@

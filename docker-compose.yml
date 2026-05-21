@@ -1,0 +1,29 @@
+services:
+  kanvis-edge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kanvis-edge:latest
+    container_name: kanvis-edge
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      # Edge API Gateway (WAN: mapear 55443 -> 8000 en router)
+      - "${EDGE_API_PORT:-8000}:8000"
+      # RTSP proxy interno (opcional)
+      - "${EDGE_RTSP_PORT:-8554}:8554"
+      # WebRTC signaling (piloto)
+      - "${WEBRTC_SIGNALING_PORT:-8188}:8188"
+    volumes:
+      - ./config:/app/config
+    networks:
+      - kanvis_lan
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+networks:
+  kanvis_lan:
+    driver: bridge

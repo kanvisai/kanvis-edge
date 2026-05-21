@@ -1,0 +1,92 @@
+"""PacketCircularBuffer: búfer por tiempo real (H.264/H.265 sin decodificar)."""
+
+from __future__ import annotations
+
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Iterator
+
+
+@dataclass(frozen=True, slots=True)
+class RawPacket:
+    """Paquete demuxado (codec copy, sin RGB/NumPy)."""
+
+    data: bytes
+    pts: int | None
+    dts: int | None
+    is_keyframe: bool
+    time_base_num: int = 1
+    time_base_den: int = 90000
+    captured_at: float = field(default_factory=time.monotonic)
+
+
+class PacketCircularBuffer:
+    """
+    Búfer circular en RAM recortado por duración en segundos (monotonic).
+    Thread-safe para StreamConsumer y VideoDispatcher.
+    """
+
+    def __init__(
+        self,
+        max_duration_seconds: float,
+        max_packets_safety: int = 50_000,
+    ) -> None:
+        self._max_duration = max_duration_seconds
+        self._max_packets_safety = max_packets_safety
+        self._deque: deque[RawPacket] = deque()
+        self._lock = threading.Lock()
+
+    @property
+    def max_duration_seconds(self) -> float:
+        return self._max_duration
+
+    def set_max_duration(self, seconds: float) -> None:
+        with self._lock:
+            self._max_duration = max(1.0, seconds)
+            self._prune_locked(time.monotonic())
+
+    def append(self, packet: RawPacket) -> None:
+        with self._lock:
+            self._deque.append(packet)
+            self._prune_locked(packet.captured_at)
+
+    def _prune_locked(self, now: float) -> None:
+        cutoff = now - self._max_duration
+        while self._deque and self._deque[0].captured_at < cutoff:
+            self._deque.popleft()
+        while len(self._deque) > self._max_packets_safety:
+            self._deque.popleft()
+
+    def size(self) -> int:
+        with self._lock:
+            return len(self._deque)
+
+    def span_seconds(self) -> float:
+        """Duración real cubierta por el búfer (0 si vacío)."""
+        with self._lock:
+            if not self._deque:
+                return 0.0
+            return self._deque[-1].captured_at - self._deque[0].captured_at
+
+    def snapshot(self) -> list[RawPacket]:
+        with self._lock:
+            return list(self._deque)
+
+    def snapshot_last_seconds(self, seconds: float) -> list[RawPacket]:
+        """Ventana [ahora - seconds, ahora] sin vaciar el búfer."""
+        now = time.monotonic()
+        cutoff = now - max(0.01, seconds)
+        with self._lock:
+            return [p for p in self._deque if p.captured_at >= cutoff]
+
+    def drain_atomic(self) -> list[RawPacket]:
+        """Vacía todo el búfer (uso legacy; preferir snapshot_last_seconds)."""
+        with self._lock:
+            drained = list(self._deque)
+            self._deque.clear()
+        return drained
+
+    def iter_live(self) -> Iterator[RawPacket]:
+        raise NotImplementedError("Usar VideoDispatcher para streaming en vivo")
