@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -21,6 +22,7 @@ from src.discovery.models import (
     CameraSource,
     CameraWebRTCOutput,
 )
+from src.testing.rtsp_probe import probe_rtsp_stream
 from src.testing.snapshot import SnapshotError, capture_jpeg_from_rtsp, local_listen_url
 from src.discovery.rtsp_urls import default_gateway_path
 from src.discovery.repository import CameraRepository
@@ -32,6 +34,8 @@ from src.relay.manager import RelayManager
 from src.webrtc.manager import WebRtcManager
 from src.relay.worker import _mask_url, build_relay_urls
 from src.discovery.models import ExternalAccessMode
+
+logger = logging.getLogger(__name__)
 from src.schedule.models import OperatingSchedule as OperatingSchedulePayload
 from src.schedule.service import OperatingScheduleService, require_operating_now
 from src.services.wan_sync import WanSyncService
@@ -347,23 +351,46 @@ async def _probe_camera_rtsp_impl(
     except (FileNotFoundError, ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     tout = settings.snapshot_timeout_sec
+    transport = record.source.transport or "tcp"
+    probe_info = None
+    try:
+        probe_info = await probe_rtsp_stream(
+            url,
+            ffmpeg_path=settings.ffmpeg_path,
+            transport=transport,
+            timeout_sec=tout,
+        )
+    except SnapshotError as exc:
+        logger.warning("ffprobe en probe RTSP: %s", exc)
     try:
         jpeg = await capture_jpeg_from_rtsp(
             url,
             ffmpeg_path=settings.ffmpeg_path,
-            transport=record.source.transport,
+            transport=transport,
             timeout_sec=tout,
         )
     except SnapshotError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return Response(
-        content=jpeg,
-        media_type="image/jpeg",
-        headers={
-            "X-Kanvis-Rtsp-Url": _mask_url(url),
-            "Cache-Control": "no-store",
-        },
-    )
+    headers = {
+        "X-Kanvis-Rtsp-Url": _mask_url(url),
+        "Cache-Control": "no-store",
+    }
+    if probe_info:
+        res = probe_info.recommendation
+        codec = probe_info.codec_name
+        dim = ""
+        if probe_info.width and probe_info.height:
+            dim = f" {probe_info.width}×{probe_info.height}"
+        headers["X-Kanvis-Video-Codec"] = codec
+        headers["X-Kanvis-Broadcast-Recommendation"] = res
+        headers["X-Kanvis-Codec-Hint"] = probe_info.recommendation_label
+        headers["Access-Control-Expose-Headers"] = (
+            "X-Kanvis-Video-Codec,X-Kanvis-Broadcast-Recommendation,"
+            "X-Kanvis-Codec-Hint,X-Kanvis-Rtsp-Url"
+        )
+        if dim:
+            headers["X-Kanvis-Video-Resolution"] = dim.strip()
+    return Response(content=jpeg, media_type="image/jpeg", headers=headers)
 
 
 @router.post("/tools/rtsp-probe")
@@ -628,6 +655,7 @@ def _build_camera_access_info(
             relay_block = {"enabled": True, **relay_preview}
 
     panel_url = f"{api_base}/"
+    viewer_url = f"{api_base}/api/v1/webrtc/{camera_id}/viewer"
     whep_url = f"{api_base}/api/v1/webrtc/{camera_id}/offer"
     status_url = f"{api_base}/api/v1/webrtc/{camera_id}/status"
     login_url = f"{api_base}/api/v1/webui/login"
@@ -635,13 +663,15 @@ def _build_camera_access_info(
         "enabled": camera.output.webrtc.enabled,
         "mode": camera.output.webrtc.mode,
         "whep_offer_url": whep_url,
+        "viewer_url": viewer_url,
         "panel_url": panel_url,
         "status_url": status_url,
         "human_steps": [
-            "El vídeo se ve aquí mismo: con broadcast activo debe aparecer el reproductor encima de este texto.",
-            "Si no hay imagen, espera 10–20 s y comprueba que pone «Ingesta OK» y que el búfer sube.",
-            f"Para abrir el panel desde otro móvil o PC: {panel_url}",
-            "No hace falta usar curl para ver el vídeo en el navegador.",
+            "Activa broadcast WebRTC en este canal (debe poner «Ingesta OK»).",
+            f"Abre el visor en otra pestaña: {viewer_url} (botón abajo; lleva tu sesión).",
+            "Esa URL es solo vídeo, no el panel de configuración.",
+            "Si no hay imagen, espera 10–20 s y comprueba que el búfer sube.",
+            "Reenvío router: WAN TCP 8000 → IP LAN del guardia (y UDP ICE si hace falta).",
         ],
         "curl_check": (
             f"# Solo para comprobar en terminal que la API responde:\n"

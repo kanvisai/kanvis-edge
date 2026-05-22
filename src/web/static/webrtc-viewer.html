@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kanvis — WebRTC</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0f1419;
+      color: #e6edf3;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1rem;
+    }
+    h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.5rem; }
+    .meta { font-size: 0.85rem; color: #8b949e; margin-bottom: 1rem; text-align: center; }
+    video {
+      width: 100%;
+      max-width: 960px;
+      max-height: 70vh;
+      background: #000;
+      border-radius: 8px;
+    }
+    .status {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      max-width: 960px;
+      width: 100%;
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+    .status.err { color: #f87171; background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.3); }
+    .status.ok { color: #3dd68c; background: rgba(61,214,140,.08); border: 1px solid rgba(61,214,140,.3); }
+    .status.wait { color: #8b949e; border: 1px solid #30363d; }
+    .login-box {
+      max-width: 360px;
+      width: 100%;
+      padding: 1.25rem;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      margin-top: 1rem;
+    }
+    .login-box label { display: block; margin-top: 0.75rem; font-size: 0.85rem; }
+    .login-box input {
+      width: 100%;
+      margin-top: 0.25rem;
+      padding: 0.5rem;
+      background: #161b22;
+      border: 1px solid #30363d;
+      color: #e6edf3;
+      border-radius: 4px;
+    }
+    .login-box button {
+      margin-top: 1rem;
+      width: 100%;
+      padding: 0.6rem;
+      background: #238636;
+      border: none;
+      color: #fff;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1 id="title">Kanvis WebRTC</h1>
+  <p class="meta" id="camera-label"></p>
+  <video id="video" playsinline autoplay muted></video>
+  <pre class="status wait" id="status">Conectando…</pre>
+  <div id="login-box" class="login-box hidden">
+    <p>Inicia sesión (mismo usuario que el panel del guardia).</p>
+    <form id="login-form">
+      <label>Usuario <input id="login-user" autocomplete="username" required /></label>
+      <label>Contraseña <input id="login-pass" type="password" autocomplete="current-password" required /></label>
+      <button type="submit">Entrar y ver vídeo</button>
+    </form>
+  </div>
+  <script src="/static/js/webrtc-viewer.js"></script>
+  <script>
+    (function () {
+      const m = location.pathname.match(/\/api\/v1\/webrtc\/([^/]+)\/viewer\/?$/);
+      const cameraId = m ? decodeURIComponent(m[1]) : "";
+      const params = new URLSearchParams(location.search);
+      let token = params.get("token") || sessionStorage.getItem("kanvis_token") || "";
+
+      const statusEl = document.getElementById("status");
+      const loginBox = document.getElementById("login-box");
+      const video = document.getElementById("video");
+
+      function setStatus(text, kind) {
+        statusEl.textContent = text;
+        statusEl.className = "status " + (kind || "wait");
+      }
+
+      if (!cameraId) {
+        setStatus("URL inválida: falta ID de cámara.", "err");
+        return;
+      }
+      document.getElementById("camera-label").textContent = "Cámara: " + cameraId;
+      document.title = "Kanvis — " + cameraId;
+
+      async function api(path, opts) {
+        const headers = { ...(opts && opts.headers) };
+        if (token) headers.Authorization = "Bearer " + token;
+        if (opts && opts.json) {
+          headers["Content-Type"] = "application/json";
+          opts.body = JSON.stringify(opts.json);
+        }
+        const res = await fetch(path, { ...opts, headers });
+        if (!res.ok) {
+          let detail = res.statusText;
+          try {
+            const j = await res.json();
+            detail = j.detail || detail;
+          } catch (_) {}
+          throw new Error(detail + " (HTTP " + res.status + ")");
+        }
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("application/json")) return res.json();
+        return res;
+      }
+
+      async function connectStream() {
+        setStatus("Conectando WebRTC (activa broadcast en el panel si no hay imagen)…", "wait");
+        loginBox.classList.add("hidden");
+        await KanvisWebRtcViewer.connect(cameraId, api, {
+          video,
+          onState: (s) => {
+            if (s === "connected") setStatus("WebRTC conectado.", "ok");
+            else if (s === "failed" || s === "disconnected")
+              setStatus("WebRTC " + s + " — comprueba broadcast activo e ingesta OK.", "err");
+          },
+        });
+      }
+
+      document.getElementById("login-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        try {
+          const data = await fetch("/api/v1/webui/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              username: document.getElementById("login-user").value.trim(),
+              password: document.getElementById("login-pass").value,
+            }),
+          }).then((r) => r.json());
+          if (!data.access_token) throw new Error("Login sin token");
+          token = data.access_token;
+          sessionStorage.setItem("kanvis_token", token);
+          await connectStream();
+        } catch (err) {
+          setStatus(err.message, "err");
+          loginBox.classList.remove("hidden");
+        }
+      });
+
+      (async function boot() {
+        if (!token) {
+          setStatus("Hace falta sesión. Entra abajo o abre el enlace desde el panel (lleva token).", "wait");
+          loginBox.classList.remove("hidden");
+          return;
+        }
+        try {
+          await api("/api/v1/webui/session");
+          await connectStream();
+        } catch (err) {
+          if (String(err.message).includes("401")) {
+            token = "";
+            sessionStorage.removeItem("kanvis_token");
+            setStatus("Sesión expirada. Vuelve a entrar.", "wait");
+            loginBox.classList.remove("hidden");
+          } else {
+            setStatus(err.message, "err");
+          }
+        }
+      })();
+    })();
+  </script>
+</body>
+</html>

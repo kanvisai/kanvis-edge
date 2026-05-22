@@ -41,6 +41,8 @@ class SecurityManager:
             return True
         if path.startswith("/static/"):
             return True
+        if path.startswith("/api/v1/webrtc/") and path.endswith("/viewer"):
+            return True
         return any(path.startswith(p) for p in PUBLIC_PREFIXES)
 
     def _extract_bearer(self, request: Request) -> str:

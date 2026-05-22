@@ -389,6 +389,9 @@ async function probeDevice(device, channel) {
   if (!body.brand) {
     throw new Error("Elige la marca (Annke, etc.) para armar la URL RTSP");
   }
+  const headers = { "Content-Type": "application/json" };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
   const paths = [
     "/api/v1/tools/rtsp-probe",
     "/api/v1/rtsp/probe",
@@ -397,8 +400,31 @@ async function probeDevice(device, channel) {
   let lastErr;
   for (const path of paths) {
     try {
-      const blob = await api(path, { method: "POST", json: body });
-      return URL.createObjectURL(blob);
+      const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
+      if (res.status === 401) {
+        logout();
+        throw new Error("Sesión expirada");
+      }
+      if (!res.ok) {
+        let detail = res.statusText;
+        try {
+          const j = await res.json();
+          detail = formatApiDetail(j.detail ?? j.message ?? j);
+        } catch (_) {}
+        throw new Error(detail ? `${detail} (HTTP ${res.status})` : `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const codec = res.headers.get("X-Kanvis-Video-Codec") || "";
+      const rec = res.headers.get("X-Kanvis-Broadcast-Recommendation") || "";
+      const hint = res.headers.get("X-Kanvis-Codec-Hint") || "";
+      const reso = res.headers.get("X-Kanvis-Video-Resolution") || "";
+      return {
+        objectUrl: URL.createObjectURL(blob),
+        codec,
+        recommendation: rec,
+        hint,
+        resolution: reso,
+      };
     } catch (err) {
       lastErr = err;
       const msg = String(err.message || "");
@@ -408,6 +434,14 @@ async function probeDevice(device, channel) {
   throw new Error(
     `${lastErr?.message || "Probe no disponible"}. En el guardia ejecuta: sudo ./scripts/deploy.sh --yes y recarga la web (Ctrl+F5). Comprueba: curl http://127.0.0.1:8000/api/v1/health`
   );
+}
+
+function webrtcViewerHref(viewerUrl) {
+  if (!viewerUrl) return "";
+  const tok = getToken();
+  if (!tok) return viewerUrl;
+  const sep = viewerUrl.includes("?") ? "&" : "?";
+  return `${viewerUrl}${sep}token=${encodeURIComponent(tok)}`;
 }
 
 async function loadBrands() {
@@ -589,12 +623,20 @@ function renderConnectionHints(el, info, mode) {
       html += `<li>${escapeHtml(s)}</li>`;
     }
     html += `</ol>`;
-    if (w.panel_url) {
-      html += `<p><a class="conn-link" href="${escapeHtml(w.panel_url)}" target="_blank" rel="noopener">${escapeHtml(
-        w.panel_url
+    const viewerHref = webrtcViewerHref(w.viewer_url || "");
+    if (viewerHref) {
+      html += `<p class="hint"><strong>Ver vídeo (nueva pestaña):</strong></p>`;
+      html += `<p><a class="conn-link" href="${escapeHtml(viewerHref)}" target="_blank" rel="noopener">${escapeHtml(
+        viewerHref
       )}</a> <button type="button" class="btn-sm" data-copy-url="${escapeHtml(
+        viewerHref
+      )}">Copiar</button></p>`;
+      html += `<p class="hint">Activa broadcast WebRTC antes. Si no llevas token, la pestaña pedirá login.</p>`;
+    }
+    if (w.panel_url) {
+      html += `<p class="hint">Panel de configuración: <a class="conn-link" href="${escapeHtml(
         w.panel_url
-      )}">Copiar enlace</button></p>`;
+      )}" target="_blank" rel="noopener">${escapeHtml(w.panel_url)}</a></p>`;
     }
     html += `</div>`;
     html += `<details class="conn-advanced"><summary>Detalles técnicos (desarrolladores)</summary><pre class="conn-pre">POST ${escapeHtml(
@@ -952,11 +994,20 @@ function renderDevicePanel(device) {
     }
     setActionMsg(msg, "Capturando frame RTSP…");
     try {
-      const url = await probeDevice(device, device.probeChannel);
-      preview.innerHTML = `<img src="${url}" alt="Vista previa" />`;
+      const probe = await probeDevice(device, device.probeChannel);
+      preview.innerHTML = `<img src="${probe.objectUrl}" alt="Vista previa" />`;
+      device.probeCodec = probe.codec || "";
+      device.probeBroadcastRec = probe.recommendation || "";
+      if (probe.recommendation === "webrtc" || probe.recommendation === "rtsp") {
+        device.broadcastMode = probe.recommendation;
+      }
+      const codecLine = probe.codec
+        ? `Códec vídeo: ${probe.codec}${probe.resolution ? ` (${probe.resolution})` : ""}.`
+        : "Códec: no detectado (instala ffprobe).";
+      const recLine = probe.hint || "";
       setActionMsg(
         msg,
-        `Conexión RTSP correcta (canal ${device.probeChannel || "—"}). Puedes guardar la cámara.`,
+        `RTSP OK (canal ${device.probeChannel || "—"}). ${codecLine} ${recLine} Puedes guardar la cámara.`,
         "ok"
       );
       const oldKey = device.key;

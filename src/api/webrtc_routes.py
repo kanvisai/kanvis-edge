@@ -6,7 +6,10 @@ import asyncio
 import logging
 from typing import Annotated
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from src.ingestion.consumer import StreamConsumerManager
@@ -16,6 +19,10 @@ from src.webrtc.manager import WebRtcManager
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/webrtc", tags=["webrtc"])
+
+_VIEWER_HTML = (
+    Path(__file__).resolve().parent.parent / "web" / "static" / "webrtc-viewer.html"
+)
 
 
 def _webrtc_http_error(exc: Exception, camera_id: str) -> HTTPException:
@@ -57,6 +64,21 @@ async def list_webrtc_sessions(
     manager: Annotated[WebRtcManager, Depends(get_webrtc_manager)],
 ) -> list[dict]:
     return manager.list_status()
+
+
+@router.get("/{camera_id}/viewer")
+async def webrtc_viewer_page(camera_id: str) -> FileResponse:
+    """
+    Página mínima solo para ver WebRTC (nueva pestaña).
+    Usa ?token= del panel o login integrado. Requiere broadcast activo.
+    """
+    if not _VIEWER_HTML.is_file():
+        raise HTTPException(status_code=404, detail="Visor WebRTC no instalado")
+    return FileResponse(
+        _VIEWER_HTML,
+        media_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/{camera_id}/offer")
