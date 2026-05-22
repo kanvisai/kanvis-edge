@@ -38,6 +38,22 @@ sudo nano /etc/kanvis-edge/env
 sudo ./scripts/deploy.sh
 ```
 
+## Desinstalación limpia (reinstalar)
+
+```bash
+cd kanvis-edge   # o desde /opt/kanvis-edge/scripts antes de borrarlo
+sudo ./scripts/uninstall.sh
+```
+
+Por defecto **conserva** el usuario `kanvis` y SSH (mueve el home a `/home/kanvis` y borra `/opt/kanvis-edge`). No desinstala paquetes APT.
+
+```bash
+sudo ./scripts/uninstall.sh --yes              # sin confirmación
+sudo ./scripts/uninstall.sh --remove-user    # borra también el usuario
+```
+
+Tras desinstalar: `preflight` → `install` → editar `/etc/kanvis-edge/env` → `deploy`. Con Ethernet y `NETWORK_MODE=ap_and_lan` puedes usar el AP en WiFi sin perder internet por cable.
+
 ### Usuario `kanvis`, SSH y VNC
 
 `install.sh` crea el usuario **`kanvis`** con contraseña **`KANVIS_OS_PASSWORD`** (en `/etc/kanvis-edge/env` o `/opt/kanvis-edge/.env`), grupo **`sudo`**, **OpenSSH** con reenvío **X11** (`ssh -X`) y **VNC**:

@@ -4,12 +4,12 @@ Asumes que ya hiciste `git clone` y estás en la carpeta `kanvis-edge`.
 
 ## Qué editar ANTES de cada comando
 
-| Momento | Ficheros (en el clone, antes de `install`) | Ficheros (en el cacharro, antes de `deploy`) |
-|---------|--------------------------------------------|-----------------------------------------------|
-| **Opcional antes de install** | `deploy/network/kanvis-edge.env.example` → `KANVIS_OS_PASSWORD` | — |
-| **Obligatorio antes de deploy** | — | `/opt/kanvis-edge/.env` y `/etc/kanvis-edge/env` |
+| Momento | Fichero único en hardware |
+|---------|---------------------------|
+| **Antes de `install` (opcional)** | `deploy/kanvis-edge.env.example` en el clone |
+| **Antes de `deploy`** | **`/etc/kanvis-edge/env`** (y `/opt/kanvis-edge/.env` es el mismo enlace) |
 
-No hace falta tocar nada más para que `install.sh` termine; el panel y la nube se configuran **antes de `deploy.sh`**.
+No edites dos sitios con valores distintos: un solo fichero.
 
 ---
 
@@ -38,7 +38,7 @@ No crea usuario ni red WiFi kanvis.
 Edita **en el clone** (se copiará a `/etc/kanvis-edge/env` la primera vez):
 
 ```bash
-nano deploy/network/kanvis-edge.env.example
+nano deploy/kanvis-edge.env.example
 ```
 
 Cambia:
@@ -70,11 +70,12 @@ Si falló antes a medias, vuelve a lanzar el mismo comando tras poner `KANVIS_OS
 ## Paso 4 — Configuración (ANTES de `deploy.sh`)
 
 ```bash
-sudo nano /opt/kanvis-edge/.env
 sudo nano /etc/kanvis-edge/env
 ```
 
-### `/opt/kanvis-edge/.env` (mínimo)
+(`ls -l /opt/kanvis-edge/.env` debe apuntar al mismo fichero.)
+
+### Variables principales (todo en `/etc/kanvis-edge/env`)
 
 ```env
 DEVICE_NAME=store-01-edge          # igual que en Kanvis C4
@@ -89,14 +90,7 @@ CLOUD_REPORT_URL=http://TU-BACKEND:7777/api/v1/kanvis-edges/report-public-ip
 CLOUD_ACCESS_TOKEN=token-del-alta-c4
 ```
 
-### `/etc/kanvis-edge/env`
-
-```env
-KANVIS_OS_PASSWORD=TuContraseñaSegura123   # misma que para SSH kanvis
-AP_PASSWORD=wifi-instalacion-segura
-NETWORK_MODE=ap_and_lan
-WLAN_INTERFACE=wlan0
-```
+Incluye también `KANVIS_OS_PASSWORD`, `WLAN_INTERFACE`, `AP_PASSWORD`, `NETWORK_MODE`, etc.
 
 ---
 

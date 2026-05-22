@@ -12,10 +12,33 @@ DNSMASQ_CONF="${STATE_DIR}/dnsmasq-ap.conf"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/distro.sh
 source "${SCRIPT_DIR}/lib/distro.sh"
+# shellcheck source=lib/install-access.sh
+source "${SCRIPT_DIR}/lib/install-access.sh"
 
-# shellcheck source=/dev/null
-[[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
-[[ -f "${INSTALL_ROOT}/.env" ]] && set -a && source "${INSTALL_ROOT}/.env" && set +a
+load_env_file_safe() {
+  local f="$1"
+  [[ -f "$f" ]] || return 0
+  local line key val
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -n "$line" ]] || continue
+    [[ "$line" == *"="* ]] || continue
+    key="${line%%=*}"
+    key="${key%"${key##*[![:space:]]}"}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    val="${line#*=}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    val="${val%\"}"; val="${val#\"}"
+    val="${val%\'}"; val="${val#\'}"
+    export "${key}=${val}"
+  done < "$f"
+}
+
+# Solo /etc/kanvis-edge/env ( .env en /opt es enlace al mismo fichero )
+load_env_file_safe "$ENV_FILE"
 
 NETWORK_MODE="${NETWORK_MODE:-ap_and_lan}"
 WLAN_INTERFACE="${WLAN_INTERFACE:-wlan0}"
@@ -81,9 +104,25 @@ setup_lan() {
   fi
 }
 
+_detect_wifi_interface() {
+  if iface_exists "$WLAN_INTERFACE"; then
+    return 0
+  fi
+  local cand
+  for cand in wlP1p1s0 wlp1s0 wlan0 wlan1; do
+    if iface_exists "$cand"; then
+      log "AVISO: ${WLAN_INTERFACE} no existe; usando ${cand}"
+      WLAN_INTERFACE="$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
 setup_ap() {
-  if ! iface_exists "$WLAN_INTERFACE"; then
-    log "ERROR: interfaz WiFi ${WLAN_INTERFACE} no existe"
+  if ! _detect_wifi_interface; then
+    log "ERROR: interfaz WiFi no encontrada (configura WLAN_INTERFACE en ${ENV_FILE})"
+    log "  Interfaces: $(ip -br link 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
     exit 1
   fi
   mkdir -p "$STATE_DIR"

@@ -64,24 +64,21 @@ rsync -a --delete \
   "$REPO_ROOT/" "$INSTALL_ROOT/"
 ui_ok "Archivos copiados"
 
-ui_section "Ficheros de configuración plantilla"
-if [[ ! -f "${INSTALL_ROOT}/.env" ]]; then
-  cp "${INSTALL_ROOT}/.env.example" "${INSTALL_ROOT}/.env"
-  ui_ok "Creado ${INSTALL_ROOT}/.env"
-else
-  ui_warn "Ya existe ${INSTALL_ROOT}/.env (no se sobrescribe)"
-fi
+ui_section "Ficheros de configuración (un solo fichero en hardware)"
 if [[ ! -f "$ENV_SYSTEM" ]]; then
-  cp "${INSTALL_ROOT}/deploy/network/kanvis-edge.env.example" "$ENV_SYSTEM"
+  cp "${INSTALL_ROOT}/deploy/kanvis-edge.env.example" "$ENV_SYSTEM"
   ui_ok "Creado ${ENV_SYSTEM}"
 else
   ui_warn "Ya existe ${ENV_SYSTEM} (no se sobrescribe)"
 fi
+ln -sfn "$ENV_SYSTEM" "${INSTALL_ROOT}/.env"
+ui_ok "Enlace ${INSTALL_ROOT}/.env → ${ENV_SYSTEM}"
+ui_detail "Edita solo: sudo nano ${ENV_SYSTEM}"
 mkdir -p "${INSTALL_ROOT}/config/data" "${INSTALL_ROOT}/config/brands"
 
 ui_section "Contraseña usuario Linux (kanvis)"
 ui_detail "Puedes definirla ANTES del install en el clone:"
-ui_detail "  deploy/network/kanvis-edge.env.example  →  KANVIS_OS_PASSWORD"
+ui_detail "  deploy/kanvis-edge.env.example  →  KANVIS_OS_PASSWORD (antes del install)"
 ui_detail "Si no, se genera una temporal y se muestra aquí (cópiala)."
 KANVIS_OS_PW="$(resolve_kanvis_os_password "$ENV_SYSTEM" "${INSTALL_ROOT}/.env")" || {
   ui_fail "No se pudo obtener KANVIS_OS_PASSWORD"
