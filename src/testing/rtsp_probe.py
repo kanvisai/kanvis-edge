@@ -137,13 +137,21 @@ def _probe_pyav_sync(url: str, transport: str, timeout_sec: float) -> RtspStream
                 "stimeout": str(usec),
             },
         )
-        stream = container.streams.video[0]
+        videos = container.streams.video
+        if not videos:
+            raise SnapshotError("PyAV: sin pista de vídeo en el RTSP")
+        stream = videos[0]
         codec = (getattr(stream.codec, "name", None) or "").strip()
         if not codec:
             raise SnapshotError("PyAV no obtuvo códec de vídeo")
         mode, label = broadcast_recommendation(codec)
-        w = getattr(stream.codec_context, "width", None) or stream.width
-        h = getattr(stream.codec_context, "height", None) or stream.height
+        ctx = getattr(stream, "codec_context", None)
+        w = getattr(ctx, "width", None) if ctx else None
+        h = getattr(ctx, "height", None) if ctx else None
+        if not w:
+            w = getattr(stream, "width", None)
+        if not h:
+            h = getattr(stream, "height", None)
         return RtspStreamProbe(
             codec_name=codec,
             codec_long_name=codec,
@@ -153,6 +161,10 @@ def _probe_pyav_sync(url: str, transport: str, timeout_sec: float) -> RtspStream
             recommendation_label=label + " (detectado con PyAV)",
         )
     except av.AVError as exc:
+        raise SnapshotError(f"PyAV: {exc}") from exc
+    except IndexError as exc:
+        raise SnapshotError("PyAV: sin stream de vídeo") from exc
+    except Exception as exc:
         raise SnapshotError(f"PyAV: {exc}") from exc
     finally:
         if container is not None:
@@ -174,6 +186,11 @@ async def probe_rtsp_stream(
             _probe_sync, url, ffprobe, transport, timeout_sec
         )
     except SnapshotError:
-        return await asyncio.to_thread(
-            _probe_pyav_sync, url, transport, timeout_sec
-        )
+        try:
+            return await asyncio.to_thread(
+                _probe_pyav_sync, url, transport, min(timeout_sec, 8.0)
+            )
+        except SnapshotError:
+            raise
+        except Exception as exc:
+            raise SnapshotError(str(exc)) from exc

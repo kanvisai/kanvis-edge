@@ -403,17 +403,18 @@ function showProbeCodecBadge(panel, probe) {
 
 async function fetchProbeCodecMeta(body) {
   const paths = ["/api/v1/tools/rtsp-probe-meta", "/api/v1/rtsp/probe-meta"];
-  let lastErr;
+  let lastErr = "";
   for (const path of paths) {
     try {
       return await api(path, { method: "POST", json: body });
     } catch (err) {
-      lastErr = err;
-      const msg = String(err.message || "");
-      if (!msg.includes("404") && !msg.includes("405")) throw err;
+      lastErr = err.message || String(err);
+      const msg = String(lastErr);
+      if (msg.includes("404") || msg.includes("405")) continue;
+      return { ok: false, codec_detected: false, error: lastErr };
     }
   }
-  return { ok: false, codec_detected: false, error: lastErr?.message || "meta no disponible" };
+  return { ok: false, codec_detected: false, error: lastErr || "meta no disponible (deploy?)" };
 }
 
 async function probeDevice(device, channel) {

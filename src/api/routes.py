@@ -312,6 +312,20 @@ async def list_brands(
     return {"brands_dir": str(root), "brands": items}
 
 
+def _ascii_header_value(value: str) -> str:
+    """Cabeceras HTTP solo admiten latin-1; evita 500 con «×», tildes, etc."""
+    if not value:
+        return ""
+    return (
+        value.replace("×", "x")
+        .replace("—", "-")
+        .replace("«", "")
+        .replace("»", "")
+        .encode("latin-1", "replace")
+        .decode("latin-1")
+    )
+
+
 class CameraProbeRequest(BaseModel):
     """Prueba RTSP sin guardar cámara (vista previa JPEG)."""
 
@@ -371,6 +385,14 @@ async def _probe_rtsp_codec_meta(
             "error": str(exc),
             "rtsp_url_masked": _mask_url(url),
         }
+    except Exception as exc:
+        logger.exception("probe-meta inesperado")
+        return {
+            "ok": False,
+            "codec_detected": False,
+            "error": str(exc),
+            "rtsp_url_masked": _mask_url(url),
+        }
     out = probe_info.as_dict()
     out["ok"] = True
     out["codec_detected"] = bool(probe_info.codec_name)
@@ -383,51 +405,60 @@ async def _probe_camera_rtsp_impl(
     settings: AppSettings,
 ) -> Response:
     """Captura un frame JPEG desde RTSP con los datos del formulario."""
-    record = _probe_record_from_body(body)
     try:
-        url = record.rtsp_url(settings=settings)
-    except (FileNotFoundError, ValueError, KeyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    tout = settings.snapshot_timeout_sec
-    transport = record.source.transport or "tcp"
-    probe_info = None
-    try:
-        probe_info = await probe_rtsp_stream(
-            url,
-            ffmpeg_path=settings.ffmpeg_path,
-            transport=transport,
-            timeout_sec=tout,
-        )
-    except SnapshotError as exc:
-        logger.warning("Análisis códec RTSP: %s", exc)
-    try:
+        record = _probe_record_from_body(body)
+        try:
+            url = record.rtsp_url(settings=settings)
+        except (FileNotFoundError, ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        tout = settings.snapshot_timeout_sec
+        transport = record.source.transport or "tcp"
+        probe_info = None
+        try:
+            probe_info = await probe_rtsp_stream(
+                url,
+                ffmpeg_path=settings.ffmpeg_path,
+                transport=transport,
+                timeout_sec=min(tout, 12.0),
+            )
+        except SnapshotError as exc:
+            logger.warning("Análisis códec RTSP: %s", exc)
+        except Exception as exc:
+            logger.warning("Análisis códec RTSP (error): %s", exc)
         jpeg = await capture_jpeg_from_rtsp(
             url,
             ffmpeg_path=settings.ffmpeg_path,
             transport=transport,
             timeout_sec=tout,
         )
+    except HTTPException:
+        raise
     except SnapshotError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("rtsp-probe falló")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     headers = {
         "X-Kanvis-Rtsp-Url": _mask_url(url),
         "Cache-Control": "no-store",
     }
     if probe_info:
-        res = probe_info.recommendation
         codec = probe_info.codec_name
-        dim = ""
-        if probe_info.width and probe_info.height:
-            dim = f" {probe_info.width}×{probe_info.height}"
-        headers["X-Kanvis-Video-Codec"] = codec
-        headers["X-Kanvis-Broadcast-Recommendation"] = res
-        headers["X-Kanvis-Codec-Hint"] = probe_info.recommendation_label
+        headers["X-Kanvis-Video-Codec"] = _ascii_header_value(codec)
+        headers["X-Kanvis-Broadcast-Recommendation"] = _ascii_header_value(
+            probe_info.recommendation
+        )
+        headers["X-Kanvis-Codec-Hint"] = _ascii_header_value(
+            probe_info.recommendation_label
+        )
         headers["Access-Control-Expose-Headers"] = (
             "X-Kanvis-Video-Codec,X-Kanvis-Broadcast-Recommendation,"
-            "X-Kanvis-Codec-Hint,X-Kanvis-Rtsp-Url"
+            "X-Kanvis-Codec-Hint,X-Kanvis-Video-Resolution,X-Kanvis-Rtsp-Url"
         )
-        if dim:
-            headers["X-Kanvis-Video-Resolution"] = dim.strip()
+        if probe_info.width and probe_info.height:
+            headers["X-Kanvis-Video-Resolution"] = (
+                f"{probe_info.width}x{probe_info.height}"
+            )
     return Response(content=jpeg, media_type="image/jpeg", headers=headers)
 
 
