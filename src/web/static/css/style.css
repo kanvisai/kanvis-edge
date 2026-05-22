@@ -258,6 +258,47 @@ button:disabled {
   margin-bottom: 0.75rem;
 }
 
+.channel-sub-nav {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.35rem;
+}
+
+.add-channel-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.add-channel-row .add-ch-input {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.conn-block {
+  margin-bottom: 0.75rem;
+}
+
+.conn-pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.65rem;
+  font-size: 0.72rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  text-align: left;
+  margin: 0.35rem 0 0;
+}
+
+.override-fields {
+  margin-bottom: 0.65rem;
+}
+
 .device-nav {
   display: flex;
   gap: 0.5rem;

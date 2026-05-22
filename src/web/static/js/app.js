@@ -110,12 +110,14 @@ function groupCamerasByHost(cameras) {
         brand: cam.source?.brand || "",
         port: cam.source?.port || 554,
         username: cam.source?.username || "",
-        password: "",
+        password: cam.source?.password || "",
         channels: [],
       });
     }
     const dev = map.get(key);
     if (cam.source?.brand && !dev.brand) dev.brand = cam.source.brand;
+    if (cam.source?.password) dev.password = cam.source.password;
+    if (cam.source?.username) dev.username = cam.source.username;
     dev.channels.push({
       channel: cam.source?.channel || "101",
       camera: cam,
@@ -146,7 +148,10 @@ function mergeDraftWithSaved(draft, dev) {
     port: draft.port ?? dev.port,
     brand: draft.brand ?? dev.brand,
     username: draft.username !== undefined ? draft.username : dev.username,
-    password: draft.password !== undefined ? draft.password : dev.password,
+    password:
+      draft.password !== undefined && draft.password !== ""
+        ? draft.password
+        : dev.password || "",
     probeChannel: draft.probeChannel ?? dev.probeChannel,
     broadcastMode: draft.broadcastMode ?? dev.broadcastMode,
     channels: draft.channels?.length ? draft.channels : dev.channels,
@@ -296,6 +301,11 @@ async function loadBrands() {
 async function loadCameras() {
   try {
     camerasCache = await api("/api/v1/cameras");
+    for (const cam of camerasCache) {
+      const key = hostKey(cam.source?.host || "");
+      const draft = draftDevices.find((d) => d.key === key);
+      if (draft && cam.source?.password) draft.password = cam.source.password;
+    }
     renderDevices();
   } catch (err) {
     toast(err.message, true);
@@ -357,78 +367,159 @@ function renderDeviceNav(devices) {
   }
 }
 
-function renderChannelCard(device, chState, panel) {
+function getSavedChannels(device) {
+  return device.channels.filter((c) => c.saved && c.camera);
+}
+
+function ensureActiveChannel(device) {
+  const saved = getSavedChannels(device);
+  if (!saved.length) {
+    device.activeChannel = null;
+    return;
+  }
+  if (!saved.some((c) => c.channel === device.activeChannel)) {
+    device.activeChannel = saved[0].channel;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function renderConnectionHints(el, info, mode) {
+  if (!el || !info) return;
+  const s = info.source || {};
+  let html = `<p class="section-label">Cómo probar desde fuera</p>`;
+  html += `<div class="conn-block"><strong>Origen (cámara)</strong><pre class="conn-pre">${escapeHtml(
+    info.device_rtsp_masked || "—"
+  )}\n\n${escapeHtml(s.mpv || "")}</pre></div>`;
+  if (mode === "rtsp") {
+    if (info.relay?.url_lan) {
+      html += `<div class="conn-block"><strong>Broadcast RTSP</strong><pre class="conn-pre">LAN: ${escapeHtml(
+        info.relay.url_lan
+      )}\nEn el guardia: ${escapeHtml(info.relay.url_local || "")}\n\n${escapeHtml(
+        info.relay.mpv || ""
+      )}</pre><p class="hint">Otro PC en la misma red: mpv/vlc con URL LAN. Desde internet: reenvío de puerto ${info.relay.listen_port || "?"} al guardia.</p></div>`;
+    } else if (info.relay?.enabled) {
+      html += `<p class="hint">Activa broadcast RTSP para ver la URL.</p>`;
+    }
+  }
+  if (mode === "webrtc" && info.webrtc) {
+    const w = info.webrtc;
+    html += `<div class="conn-block"><strong>WebRTC (WHEP)</strong><pre class="conn-pre">POST ${escapeHtml(
+      w.whep_offer_url
+    )}\nBody: {"sdp":"...","type":"offer"}\nAuthorization: Bearer &lt;token&gt;\n\nPanel: ${escapeHtml(
+      w.panel_url
+    )}\n\n${escapeHtml(w.hint_external || "")}</pre></div>`;
+  }
+  html += `<p class="hint">Guardado en ${escapeHtml(info.storage?.backend || "?")}: ${escapeHtml(
+    info.storage?.path || ""
+  )}</p>`;
+  el.innerHTML = html;
+}
+
+async function loadAccessInfo(cameraId, card) {
+  const el = card?.querySelector(".conn-hints");
+  if (!el) return;
+  try {
+    const info = await api(`/api/v1/cameras/${cameraId}/access-info`);
+    const mode =
+      card.querySelector(`input[name="bc-mode-${cameraId}"]:checked`)?.value || "rtsp";
+    renderConnectionHints(el, info, mode);
+  } catch (err) {
+    el.innerHTML = `<p class="hint">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function readBroadcastOverride(device, cam, card) {
+  if (!card.querySelector("[data-bc-override]")?.checked) {
+    return {
+      host: device.host,
+      port: device.port,
+      username: device.username,
+      password: device.password,
+      brand: device.brand,
+      channel: cam?.source?.channel || device.probeChannel,
+    };
+  }
+  return {
+    host: card.querySelector(".ov-host")?.value?.trim() || device.host,
+    port: card.querySelector(".ov-port")?.value || device.port,
+    username: card.querySelector(".ov-user")?.value || device.username,
+    password: card.querySelector(".ov-pass")?.value ?? device.password,
+    brand: card.querySelector(".ov-brand")?.value || device.brand,
+    channel: card.querySelector(".ov-channel")?.value?.trim() || cam?.source?.channel,
+  };
+}
+
+function renderChannelPanel(device, chState, root) {
   const ch = chState.channel;
   const cam = chState.camera;
-  const cameraId = cam?.camera_id || makeCameraId(device.host, ch);
-  const saved = chState.saved && !!cam;
+  const cameraId = cam.camera_id;
   const mode = device.broadcastMode || "rtsp";
+  const src = cam.source || {};
 
   const card = document.createElement("div");
   card.className = "channel-card";
-  card.dataset.channel = ch;
   card.dataset.cameraId = cameraId;
 
   card.innerHTML = `
     <header>
-      <strong>Canal ${ch}</strong>
+      <strong>Canal ${escapeHtml(ch)}</strong>
       <span class="ch-status badge muted">—</span>
     </header>
-    ${
-      saved
-        ? ""
-        : `
-      <label>Nº canal</label>
-      <input type="text" class="ch-input" value="${ch}" inputmode="numeric" />
-      <button type="button" class="btn-sm" data-save-extra="">Guardar este canal</button>
-    `
-    }
-    ${
-      saved
-        ? `
-      <p class="section-label">Broadcast (búfer 60 s)</p>
-      <div class="mode-row">
-        <label class="mode-opt"><input type="radio" name="bc-mode-${cameraId}" value="rtsp" ${mode === "rtsp" ? "checked" : ""}/> RTSP</label>
-        <label class="mode-opt"><input type="radio" name="bc-mode-${cameraId}" value="webrtc" ${mode === "webrtc" ? "checked" : ""}/> WebRTC</label>
+    <p class="section-label">Broadcast (búfer 60 s)</p>
+    <div class="mode-row">
+      <label class="mode-opt"><input type="radio" name="bc-mode-${cameraId}" value="rtsp" ${mode === "rtsp" ? "checked" : ""}/> RTSP rebroadcast</label>
+      <label class="mode-opt"><input type="radio" name="bc-mode-${cameraId}" value="webrtc" ${mode === "webrtc" ? "checked" : ""}/> WebRTC</label>
+    </div>
+    <label class="check-row">
+      <input type="checkbox" data-bc-override="" /> Otros datos RTSP al activar broadcast
+    </label>
+    <div class="override-fields hidden">
+      <div class="field-grid">
+        <div class="span2"><label>IP</label><input class="ov-host" value="${escapeHtml(device.host || "")}" /></div>
+        <div><label>Puerto</label><input class="ov-port" type="number" value="${device.port || 554}" /></div>
+        <div><label>Canal</label><input class="ov-channel" value="${escapeHtml(src.channel || ch)}" /></div>
+        <div><label>Usuario</label><input class="ov-user" value="${escapeHtml(device.username || "")}" /></div>
+        <div><label>Contraseña</label><input class="ov-pass" type="text" value="${escapeHtml(device.password || "")}" /></div>
+        <div class="span2"><label>Marca</label><select class="ov-brand">${brandOptionsHtml(device.brand)}</select></div>
       </div>
-      <button type="button" class="btn-block btn-toggle-bc off" data-toggle-bc="">Activar broadcast</button>
-      <p class="buf-hint hint">El búfer solo se rellena con broadcast activo.</p>
-      <button type="button" class="btn-block secondary" data-playback-test="" disabled>Probar playback (−${PLAYBACK_OFFSET_SEC} s)</button>
-      <div class="playback-preview hidden">
-        <p class="hint">Frame del búfer (comprueba la marca de agua / hora):</p>
-        <img alt="Playback" />
-      </div>
-      <video class="channel-video hidden" playsinline muted autoplay></video>
-      <button type="button" class="btn-sm danger" data-del-ch="">Eliminar canal</button>
-    `
-        : ""
-    }
+    </div>
+    <button type="button" class="btn-block btn-toggle-bc off" data-toggle-bc="">Activar broadcast</button>
+    <p class="buf-hint hint">El búfer solo se rellena con broadcast activo.</p>
+    <button type="button" class="btn-block secondary" data-playback-test="" disabled>Probar playback (−${PLAYBACK_OFFSET_SEC} s)</button>
+    <div class="playback-preview hidden">
+      <p class="hint">Frame del búfer (~${PLAYBACK_OFFSET_SEC} s atrás):</p>
+      <img alt="Playback" />
+    </div>
+    <video class="channel-video hidden" playsinline muted autoplay></video>
+    <div class="conn-hints"></div>
+    <button type="button" class="btn-sm danger" data-del-ch="">Eliminar este canal</button>
   `;
 
-  if (!saved) {
-    card.querySelector(".ch-input")?.addEventListener("change", (e) => {
-      chState.channel = e.target.value.trim() || ch;
+  card.querySelector("[data-bc-override]")?.addEventListener("change", (e) => {
+    card.querySelector(".override-fields")?.classList.toggle("hidden", !e.target.checked);
+  });
+  card.querySelectorAll(`input[name="bc-mode-${cameraId}"]`).forEach((r) => {
+    r.addEventListener("change", () => {
+      device.broadcastMode = r.value;
+      loadAccessInfo(cameraId, card);
     });
-    card.querySelector("[data-save-extra]")?.addEventListener("click", () =>
-      saveExtraChannel(device, chState)
-    );
-  } else {
-    card.querySelectorAll(`input[name="bc-mode-${cameraId}"]`).forEach((r) => {
-      r.addEventListener("change", () => {
-        device.broadcastMode = r.value;
-      });
-    });
-    card.querySelector("[data-toggle-bc]")?.addEventListener("click", () =>
-      toggleBroadcast(device, cam, card)
-    );
-    card.querySelector("[data-playback-test]")?.addEventListener("click", () =>
-      testPlaybackBuffer(cameraId, card)
-    );
-    card.querySelector("[data-del-ch]")?.addEventListener("click", () => deleteCamera(cameraId));
-    refreshChannelStatus(cameraId, card);
-  }
-
-  panel.appendChild(card);
+  });
+  card.querySelector("[data-toggle-bc]")?.addEventListener("click", () =>
+    toggleBroadcast(device, cam, card)
+  );
+  card.querySelector("[data-playback-test]")?.addEventListener("click", () =>
+    testPlaybackBuffer(cameraId, card)
+  );
+  card.querySelector("[data-del-ch]")?.addEventListener("click", () => deleteCamera(cameraId));
+  refreshChannelStatus(cameraId, card);
+  loadAccessInfo(cameraId, card);
+  root.appendChild(card);
 }
 
 function renderDevicePanel(device) {
@@ -462,12 +553,13 @@ function renderDevicePanel(device) {
         <label>Usuario</label>
         <input class="dev-user" value="${device.username || ""}" autocomplete="username" />
       </div>
-      <div>
+      <div class="span2">
         <label>Contraseña</label>
-        <input class="dev-pass" type="password" value="${device.password || ""}" autocomplete="current-password" />
+        <input class="dev-pass" type="text" value="${escapeHtml(device.password || "")}" autocomplete="off" />
+        <p class="hint">Visible tras guardar (red local de instalación).</p>
       </div>
     </div>
-    <p class="section-label">1 · Conexión</p>
+    <p class="section-label">1 · Probar cámara</p>
     <div class="probe-box">
       <div class="probe-preview">
         <p class="probe-placeholder">Prueba la URL RTSP antes de guardar</p>
@@ -478,10 +570,14 @@ function renderDevicePanel(device) {
     </div>
     <p class="section-label">2 · Guardar</p>
     <button type="button" class="btn-block primary" data-save-device="">Guardar cámara</button>
-    <p class="save-hint hint">Guarda la IP y el canal de prueba (${device.probeChannel || "101"}). Luego podrás activar broadcast y probar el búfer.</p>
-    <p class="section-label">3 · Canales</p>
-    <button type="button" class="btn-sm secondary" data-add-channel="">+ Añadir otro canal</button>
-    <div class="channels-root"></div>
+    <p class="save-hint hint">Guarda la IP y el canal de prueba (${device.probeChannel || "101"}).</p>
+    <p class="section-label">3 · Canales guardados</p>
+    <nav class="channel-sub-nav"></nav>
+    <div class="channel-detail-root"></div>
+    <div class="add-channel-row">
+      <input class="add-ch-input" placeholder="ej. stream2" />
+      <button type="button" class="btn-sm secondary" data-add-ch-save="">+ Añadir canal</button>
+    </div>
   `;
 
   const bind = (sel, fn) => {
@@ -558,17 +654,19 @@ function renderDevicePanel(device) {
     saveCameraDevice(device, panel)
   );
 
-  panel.querySelector("[data-add-channel]")?.addEventListener("click", () => {
-    const existing = new Set(device.channels.map((c) => c.channel));
-    let next = "101";
-    for (const n of ["101", "102", "201", "202", "1", "2"]) {
-      if (!existing.has(n)) {
-        next = n;
-        break;
-      }
+  panel.querySelector("[data-add-ch-save]")?.addEventListener("click", async () => {
+    const ch = panel.querySelector(".add-ch-input")?.value?.trim();
+    if (!ch) return toast("Indica el canal (ej. stream2)", true);
+    try {
+      await persistCamera(device, ch, `${device.host} ch${ch}`);
+      toast(`Canal ${ch} guardado`);
+      await loadCameras();
+      device.activeChannel = ch;
+      activeDeviceKey = device.key;
+      renderDevices();
+    } catch (err) {
+      toast(err.message, true);
     }
-    device.channels.push({ channel: next, saved: false, camera: null });
-    renderDevices();
   });
 
   panel.querySelector("[data-remove-device]")?.addEventListener("click", () => {
@@ -577,9 +675,29 @@ function renderDevicePanel(device) {
     renderDevices();
   });
 
-  const chRoot = panel.querySelector(".channels-root");
-  for (const chState of device.channels) {
-    renderChannelCard(device, chState, chRoot);
+  ensureActiveChannel(device);
+  const saved = getSavedChannels(device);
+  const subNav = panel.querySelector(".channel-sub-nav");
+  const detailRoot = panel.querySelector(".channel-detail-root");
+  subNav.innerHTML = "";
+  detailRoot.innerHTML = "";
+  if (!saved.length) {
+    detailRoot.innerHTML =
+      '<p class="hint">Guarda la cámara arriba. Luego añade más canales (stream1, stream2…).</p>';
+  } else {
+    for (const chState of saved) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `device-tab${chState.channel === device.activeChannel ? " active" : ""}`;
+      btn.textContent = `Canal ${chState.channel}`;
+      btn.addEventListener("click", () => {
+        device.activeChannel = chState.channel;
+        renderDevices();
+      });
+      subNav.appendChild(btn);
+    }
+    const active = saved.find((c) => c.channel === device.activeChannel) || saved[0];
+    renderChannelPanel(device, active, detailRoot);
   }
 
   return panel;
@@ -625,24 +743,11 @@ async function saveCameraDevice(device, panel) {
     device.key = hostKey(device.host);
     device.fromApi = true;
     device.probeOk = true;
+    upsertDeviceDraft(device);
     await loadCameras();
     activeDeviceKey = device.key;
-    toast(`Cámara guardada (canal ${channel})`);
-    panel.querySelector(".save-hint").textContent =
-      "Guardada. Activa broadcast en el canal para llenar el búfer de 60 s.";
-  } catch (err) {
-    toast(err.message, true);
-  }
-}
-
-async function saveExtraChannel(device, chState) {
-  if (!device.host?.trim()) return toast("Indica la IP", true);
-  const channel = (chState.channel || "101").trim();
-  try {
-    await persistCamera(device, channel, `${device.host} ch${channel}`);
-    toast(`Canal ${channel} guardado`);
-    await loadCameras();
-    activeDeviceKey = device.key;
+    device.activeChannel = channel;
+    toast(`Cámara guardada (canal ${channel}). Activa broadcast en el canal.`);
   } catch (err) {
     toast(err.message, true);
   }
@@ -691,6 +796,7 @@ async function refreshChannelStatus(cameraId, card) {
       playbackBtn.disabled = !bcOn || span < PLAYBACK_OFFSET_SEC * 0.85;
     }
     card.dataset.broadcastOn = bcOn ? "1" : "0";
+    if (bcOn) loadAccessInfo(cameraId, card);
   } catch {
     badge.innerHTML = '<span class="badge muted">Sin guardar / inactiva</span>';
     if (toggle) {
@@ -712,16 +818,17 @@ async function toggleBroadcast(device, cam, card) {
 
   try {
     if (!isOn) {
+      const ov = readBroadcastOverride(device, cam, card);
       const payload = buildCameraPayload(
         {
-          host: cam.source.host,
-          port: cam.source.port,
-          username: cam.source.username,
-          password: device.password || "",
-          brand: cam.source.brand,
+          host: ov.host,
+          port: ov.port,
+          username: ov.username,
+          password: ov.password || "",
+          brand: ov.brand,
           broadcastMode: mode,
         },
-        cam.source.channel,
+        ov.channel,
         cam.label,
         { broadcastOn: true, broadcastMode: mode }
       );
@@ -779,6 +886,7 @@ async function toggleBroadcast(device, cam, card) {
     }
     await loadCameras();
     await refreshChannelStatus(cameraId, card);
+    await loadAccessInfo(cameraId, card);
   } catch (err) {
     toast(err.message, true);
   }

@@ -21,7 +21,7 @@ from src.discovery.models import (
     CameraSource,
     CameraWebRTCOutput,
 )
-from src.testing.snapshot import SnapshotError, capture_jpeg_from_rtsp
+from src.testing.snapshot import SnapshotError, capture_jpeg_from_rtsp, local_listen_url
 from src.discovery.rtsp_urls import default_gateway_path
 from src.discovery.repository import CameraRepository
 from src.ingestion.consumer import StreamConsumerManager
@@ -380,6 +380,106 @@ async def camera_rtsp_urls(
         "channel": camera.source.channel,
         "urls_masked": masked,
         "gateway_path": default_gateway_path(camera, settings),
+    }
+
+
+@router.get("/cameras/{camera_id}/access-info")
+async def camera_access_info(
+    camera_id: str,
+    request: Request,
+    repo: Annotated[CameraRepository, Depends(get_repository)],
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+    relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+) -> dict:
+    """Datos de conexión para pruebas (RTSP cámara, relay, WebRTC)."""
+    camera = await repo.get(camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail="Cámara no encontrada")
+
+    host_header = (request.headers.get("host") or "").strip()
+    if not host_header:
+        host_header = f"127.0.0.1:{settings.edge_api_port}"
+    scheme = request.url.scheme or "http"
+    api_base = f"{scheme}://{host_header}".rstrip("/")
+    lan_ip = settings.ap_ip or "IP_LAN_DEL_EDGE"
+
+    device_rtsp = ""
+    device_rtsp_masked = ""
+    try:
+        device_rtsp = camera.rtsp_url(settings=settings)
+        device_rtsp_masked = _mask_url(device_rtsp)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        device_rtsp_masked = f"(error: {exc})"
+
+    pwd = camera.source.password.get_secret_value()
+    mpv_device = f'mpv --rtsp-transport=tcp "{device_rtsp_masked}"'
+    if device_rtsp:
+        mpv_device = (
+            f'mpv --profile=low-latency --rtsp-transport=tcp "{device_rtsp}"'
+        )
+    source_block = {
+        "host": camera.source.host,
+        "port": camera.source.port,
+        "username": camera.source.username,
+        "password": pwd,
+        "channel": camera.source.channel,
+        "brand": camera.source.brand or "",
+        "transport": camera.source.transport or "tcp",
+        "mpv": mpv_device,
+    }
+
+    relay_block: dict | None = None
+    if camera.output.relay.enabled:
+        relay = relay_manager.get_relay(camera_id)
+        listen_port = relay_manager.get_listen_port(camera_id) or camera.output.relay.listen_port
+        try:
+            _, out_url = build_relay_urls(camera, settings, listen_port)
+            local_url = local_listen_url(out_url)
+            lan_url = out_url.replace("0.0.0.0", lan_ip).replace("127.0.0.1", lan_ip)
+            relay_block = {
+                "enabled": True,
+                "running": relay.is_running if relay else False,
+                "listen_port": listen_port,
+                "url_local": local_url,
+                "url_lan": lan_url,
+                "url_masked": _mask_url(out_url),
+                "mpv": f'mpv --rtsp-transport=tcp "{lan_url}"',
+                "vlc": f'vlc "{lan_url}"',
+            }
+        except ValueError as exc:
+            relay_block = {"enabled": True, "error": str(exc)}
+
+    webrtc_block = {
+        "enabled": camera.output.webrtc.enabled,
+        "mode": camera.output.webrtc.mode,
+        "whep_offer_url": f"{api_base}/api/v1/webrtc/{camera_id}/offer",
+        "whep_method": "POST",
+        "whep_body": "SDP offer JSON {sdp, type}",
+        "panel_url": f"{api_base}/",
+        "hint_panel": "Visor en este panel (modo WebRTC + Activar broadcast).",
+        "hint_external": (
+            "Desde fuera: túnel SSH al puerto API o port forwarding; "
+            "cabecera Authorization: Bearer <token del login>"
+        ),
+        "status_url": f"{api_base}/api/v1/webrtc/{camera_id}/status",
+    }
+
+    store = settings.camera_store_backend.value
+    store_path = (
+        str(settings.resolved_cameras_db)
+        if store == "sqlite"
+        else str(settings.resolved_cameras_json)
+    )
+
+    return {
+        "camera_id": camera_id,
+        "label": camera.label,
+        "storage": {"backend": store, "path": store_path},
+        "source": source_block,
+        "device_rtsp_masked": device_rtsp_masked,
+        "relay": relay_block,
+        "webrtc": webrtc_block,
+        "broadcast_status_url": f"{api_base}/api/v1/cameras/{camera_id}/broadcast/status",
     }
 
 
