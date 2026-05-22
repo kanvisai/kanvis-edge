@@ -193,6 +193,22 @@
           <code>/opt/kanvis-edge/.env</code> y reinicia <code>kanvis-edge</code>.
         </p>
       </div>
+      <div class="panel schedule-panel" style="margin-bottom:1rem">
+        <h3 style="margin:0 0 0.5rem;font-size:1rem">Horario operativo (búfer + broadcast)</h3>
+        <p style="color:var(--muted);font-size:0.85rem;margin:0 0 0.75rem">
+          Fuera de estas franjas el edge no ingesta vídeo (sin búfer RAM) ni hace rebroadcast RTSP.
+          Domingo sin ventanas = todo el día inactivo si solo marcas lun–sáb.
+        </p>
+        <label><input type="checkbox" id="sched-enabled" /> Activar horario</label>
+        <label style="display:block;margin-top:0.5rem">Zona horaria (opcional)</label>
+        <input id="sched-timezone" placeholder="Europe/Madrid" style="max-width:16rem" />
+        <p id="sched-status-line" style="margin:0.75rem 0;font-size:0.9rem">—</p>
+        <div id="sched-windows"></div>
+        <div class="actions" style="margin-top:0.75rem">
+          <button type="button" class="secondary" id="btn-sched-add-window">Añadir franja</button>
+          <button type="button" id="btn-sched-save">Guardar horario</button>
+        </div>
+      </div>
       <div class="actions" style="margin-bottom:0.75rem">
         <button type="button" id="btn-wan-sync">Sincronizar IP (DDNS + nube)</button>
       </div>

@@ -21,6 +21,7 @@ from src.ingestion.consumer import StreamConsumerManager
 from src.gateway.manager import GatewayManager
 from src.relay.manager import RelayManager
 from src.webrtc.manager import WebRtcManager
+from src.schedule.service import OperatingScheduleService
 from src.services.wan_sync import WanSyncService
 from src.services.security import SecurityManager
 
@@ -40,8 +41,9 @@ async def lifespan(app: FastAPI):
     loop = __import__("asyncio").get_running_loop()
 
     repo = app.state.camera_repository
-    consumer_manager = StreamConsumerManager(settings, repo)
-    relay_manager = RelayManager(settings, repo)
+    schedule_service = app.state.operating_schedule_service
+    consumer_manager = StreamConsumerManager(settings, repo, schedule_service)
+    relay_manager = RelayManager(settings, repo, schedule_service)
     gateway_manager = GatewayManager(settings, repo)
     webrtc_manager = WebRtcManager(settings, repo, consumer_manager)
     await consumer_manager.sync_from_repository(loop)
@@ -108,6 +110,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.camera_repository = create_camera_repository(settings)
+    app.state.operating_schedule_service = OperatingScheduleService(settings.config_dir)
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

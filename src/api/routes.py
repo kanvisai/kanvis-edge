@@ -21,6 +21,8 @@ from src.relay.manager import RelayManager
 from src.webrtc.manager import WebRtcManager
 from src.relay.worker import _mask_url, build_relay_urls
 from src.discovery.models import ExternalAccessMode
+from src.schedule.models import OperatingSchedule
+from src.schedule.service import OperatingScheduleService, require_operating_now
 from src.services.wan_sync import WanSyncService
 from src.brands import list_brand_slugs, load_brand_profile
 from src.brands.registry import default_brands_dir
@@ -60,9 +62,44 @@ def get_wan_sync(request: Request) -> WanSyncService | None:
     return getattr(request.app.state, "wan_sync_service", None)
 
 
+def get_operating_schedule(request: Request) -> OperatingScheduleService:
+    return request.app.state.operating_schedule_service
+
+
 @router.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/operating-schedule")
+async def get_operating_schedule(
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+) -> dict:
+    """Horario de búfer/ingesta y broadcast (persistido en config/operating_schedule.json)."""
+    sched = schedule_svc.get()
+    status = schedule_svc.get_status()
+    return {
+        "schedule": sched.model_dump(mode="json"),
+        "status": status,
+    }
+
+
+@router.put("/operating-schedule")
+async def put_operating_schedule(
+    body: OperatingSchedule,
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+    consumer_manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
+    relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+) -> dict:
+    """Actualiza el horario y aplica de inmediato (sin reiniciar el servicio)."""
+    updated = schedule_svc.update(body)
+    loop = __import__("asyncio").get_running_loop()
+    await consumer_manager.sync_from_repository(loop)
+    await relay_manager.sync_from_repository()
+    return {
+        "schedule": updated.model_dump(mode="json"),
+        "status": schedule_svc.get_status(),
+    }
 
 
 @router.get("/config")
@@ -294,10 +331,12 @@ async def delete_camera(
 async def stream_clip(
     camera_id: str,
     dispatcher: Annotated[VideoDispatcher, Depends(get_dispatcher)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
     pre_seconds: float | None = Query(default=None, ge=0.1, le=120),
     post_seconds: float | None = Query(default=None, ge=0, le=120),
 ) -> StreamingResponse:
     """Clip de evento nube: pre-alarma + post en vivo."""
+    require_operating_now(schedule_svc)
     try:
         generator = dispatcher.stream_event_clip(
             camera_id, pre_seconds=pre_seconds, post_seconds=post_seconds
@@ -321,6 +360,7 @@ async def playback(
     camera_id: str,
     dispatcher: Annotated[VideoDispatcher, Depends(get_dispatcher)],
     manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
     offset_sec: float | None = Query(default=None, ge=0.1, le=300),
     duration_sec: float | None = Query(default=None, ge=0.1, le=300),
     live_tail: bool = Query(default=False, description="Seguir con vídeo en vivo"),
@@ -330,6 +370,7 @@ async def playback(
     Ejemplo prueba 3s: ?offset_sec=3
     Ejemplo nube 6s: ?offset_sec=6
     """
+    require_operating_now(schedule_svc)
     try:
         camera = manager.get_camera_record(camera_id)
         if camera is None:
@@ -504,7 +545,9 @@ async def relay_start(
     camera_id: str,
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
     repo: Annotated[CameraRepository, Depends(get_repository)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
 ) -> dict:
+    require_operating_now(schedule_svc)
     cam = await repo.get(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Cámara no encontrada")

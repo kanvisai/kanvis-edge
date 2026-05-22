@@ -17,6 +17,7 @@ from src.ingestion.metrics import IngestMetrics
 
 if TYPE_CHECKING:
     from src.discovery.repository import CameraRepository
+    from src.schedule.service import OperatingScheduleService
 
 logger = logging.getLogger(__name__)
 
@@ -167,13 +168,22 @@ class StreamConsumerManager:
         self,
         settings: AppSettings,
         repository: CameraRepository,
+        schedule: OperatingScheduleService | None = None,
     ) -> None:
         self._settings = settings
         self._repository = repository
+        self._schedule = schedule
         self._consumers: dict[str, StreamConsumer] = {}
         self._buffers: dict[str, PacketCircularBuffer] = {}
         self._cameras: dict[str, CameraRecord] = {}
         self._lock = asyncio.Lock()
+
+    def _stop_all_locked(self) -> None:
+        for consumer in self._consumers.values():
+            consumer.stop()
+        self._consumers.clear()
+        self._buffers.clear()
+        self._cameras.clear()
 
     def get_buffer(self, camera_id: str) -> PacketCircularBuffer | None:
         return self._buffers.get(camera_id)
@@ -195,6 +205,15 @@ class StreamConsumerManager:
 
     async def sync_from_repository(self, loop: asyncio.AbstractEventLoop) -> None:
         """Añade/quita consumidores según inventario sin reiniciar el proceso."""
+        if self._schedule is not None and not self._schedule.is_operating_now():
+            async with self._lock:
+                if self._consumers:
+                    logger.info(
+                        "Horario operativo inactivo — deteniendo ingesta y búfer"
+                    )
+                    self._stop_all_locked()
+            return
+
         cameras = await self._repository.list_enabled()
         active_ids = {c.camera_id for c in cameras}
         by_id = {c.camera_id: c for c in cameras}
@@ -234,7 +253,7 @@ class StreamConsumerManager:
             await asyncio.sleep(30)
 
     def shutdown_all(self) -> None:
-        for consumer in self._consumers.values():
+        for consumer in list(self._consumers.values()):
             consumer.stop()
         self._consumers.clear()
         self._buffers.clear()

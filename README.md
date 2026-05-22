@@ -76,6 +76,14 @@ Esquema anidado (ver `config/cameras.schema.json`):
 
 Formato plano legacy (`ip_address`, `rtsp_path`, …) sigue siendo válido; se migra al cargar.
 
+### Horario operativo (búfer + broadcast)
+
+En el panel web → **Sistema** puedes activar franjas horarias (varias por día, días lun–dom).
+Fuera de horario el edge **no ingesta** (sin búfer RAM) ni **rebroadcast** RTSP.
+Persistencia: `config/operating_schedule.json` (ejemplo en `config/operating_schedule.example.json`).
+
+API: `GET/PUT /api/v1/operating-schedule`
+
 ### Búfer y playback (Fase 0)
 
 - Búfer en RAM recortado por **tiempo real** (`BUFFER_DURATION_SECONDS`, default 60).

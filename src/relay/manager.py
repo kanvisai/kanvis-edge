@@ -12,6 +12,7 @@ from src.relay.worker import FfmpegRtspRelay
 
 if TYPE_CHECKING:
     from src.discovery.repository import CameraRepository
+    from src.schedule.service import OperatingScheduleService
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,11 @@ class RelayManager:
         self,
         settings: AppSettings,
         repository: CameraRepository,
+        schedule: OperatingScheduleService | None = None,
     ) -> None:
         self._settings = settings
         self._repository = repository
+        self._schedule = schedule
         self._relays: dict[str, FfmpegRtspRelay] = {}
         self._ports: dict[str, int] = {}
         self._lock = asyncio.Lock()
@@ -47,6 +50,18 @@ class RelayManager:
         return self._settings.edge_rtsp_port + index
 
     async def sync_from_repository(self) -> None:
+        if self._schedule is not None and not self._schedule.is_operating_now():
+            async with self._lock:
+                if self._relays:
+                    logger.info(
+                        "Horario operativo inactivo — deteniendo rebroadcast RTSP"
+                    )
+                    for relay in self._relays.values():
+                        relay.stop()
+                    self._relays.clear()
+                    self._ports.clear()
+            return
+
         cameras = await self._repository.list_all()
         relay_cameras = [c for c in cameras if self._should_run_relay(c) and c.enabled]
         active_ids = {c.camera_id for c in relay_cameras}
@@ -100,6 +115,8 @@ class RelayManager:
             await asyncio.sleep(30)
 
     def start_camera(self, camera_id: str) -> bool:
+        if self._schedule is not None and not self._schedule.is_operating_now():
+            return False
         relay = self._relays.get(camera_id)
         if relay is None:
             return False

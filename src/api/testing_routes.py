@@ -14,6 +14,7 @@ from src.discovery.repository import CameraRepository
 from src.ingestion.consumer import StreamConsumerManager
 from src.relay.manager import RelayManager
 from src.relay.worker import build_relay_urls
+from src.schedule.service import OperatingScheduleService, require_operating_now
 from src.testing.snapshot import local_listen_url
 from src.testing.snapshot import SnapshotError, capture_jpeg_from_rtsp
 
@@ -40,6 +41,10 @@ def get_consumer_manager(request: Request) -> StreamConsumerManager:
 
 def get_relay_manager(request: Request) -> RelayManager:
     return request.app.state.relay_manager
+
+
+def get_operating_schedule(request: Request) -> OperatingScheduleService:
+    return request.app.state.operating_schedule_service
 
 
 def get_dispatcher(request: Request) -> VideoDispatcher:
@@ -150,8 +155,10 @@ async def broadcast_start(
     camera_id: str,
     repo: Annotated[CameraRepository, Depends(get_repository)],
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
 ) -> dict:
     """Inicia rebroadcast RTSP (alias de relay/start para la UI de pruebas)."""
+    require_operating_now(schedule_svc)
     cam = await repo.get(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Cámara no encontrada")
@@ -217,7 +224,9 @@ async def test_playback(
     dispatcher: Annotated[VideoDispatcher, Depends(get_dispatcher)],
     manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
     settings: Annotated[AppSettings, Depends(get_settings)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
 ) -> dict:
+    require_operating_now(schedule_svc)
     """
     Inicia prueba de playback: devuelve metadatos y URL para descargar el stream.
     Usa offset desde el momento de la petición (vía búfer RAM).
@@ -259,11 +268,13 @@ async def test_playback_stream(
     dispatcher: Annotated[VideoDispatcher, Depends(get_dispatcher)],
     manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
     settings: Annotated[AppSettings, Depends(get_settings)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
     offset_sec: float = Query(default=3.0, ge=0.1, le=120),
     duration_sec: float | None = Query(default=None, ge=0.1, le=120),
     live_tail: bool = Query(default=False),
 ) -> StreamingResponse:
     """Stream directo de prueba playback (mismo formato KANV1 que /playback)."""
+    require_operating_now(schedule_svc)
     camera = manager.get_camera_record(camera_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="Cámara no activa")

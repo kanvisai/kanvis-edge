@@ -109,7 +109,10 @@ $$(".tabs button").forEach((btn) => {
     const tab = btn.dataset.tab;
     $$(".tab-panel").forEach((p) => p.classList.toggle("hidden", p.id !== `tab-${tab}`));
     if (tab === "cameras") loadCameras();
-    if (tab === "system") loadSystem();
+    if (tab === "system") {
+      loadSystem();
+      loadOperatingSchedule();
+    }
   });
 });
 
@@ -193,6 +196,7 @@ async function loadCameras() {
   const list = $("#camera-list");
   list.innerHTML = "<p>Cargando…</p>";
   try {
+    const schedHint = await api("/api/v1/operating-schedule").catch(() => null);
     camerasCache = await api("/api/v1/cameras");
     if (!camerasCache.length) {
       list.innerHTML = "<p>No hay cámaras. Añade una abajo.</p>";
@@ -216,7 +220,11 @@ async function loadCameras() {
           statusHtml += ' <span class="badge ok">WebRTC</span>';
         }
       } catch {
-        statusHtml = '<span class="badge err">Inactiva</span>';
+        if (schedHint?.status?.enabled && !schedHint.status.is_active_now) {
+          statusHtml = '<span class="badge warn">Fuera de horario</span>';
+        } else {
+          statusHtml = '<span class="badge err">Inactiva</span>';
+        }
       }
       card.innerHTML = `
         <h3>${cam.label || id}</h3>
@@ -534,12 +542,142 @@ $("#btn-refresh-status")?.addEventListener("click", async () => {
   }
 });
 
+const SCHED_DAY_LABELS = [
+  { v: 0, l: "Lun" },
+  { v: 1, l: "Mar" },
+  { v: 2, l: "Mié" },
+  { v: 3, l: "Jue" },
+  { v: 4, l: "Vie" },
+  { v: 5, l: "Sáb" },
+  { v: 6, l: "Dom" },
+];
+
+let scheduleCache = null;
+
+function renderScheduleWindows(windows) {
+  const root = $("#sched-windows");
+  if (!root) return;
+  root.innerHTML = "";
+  const list = windows?.length ? windows : [];
+  if (!list.length) {
+    root.innerHTML =
+      '<p style="color:var(--muted);font-size:0.85rem">Sin franjas. Añade una (ej. 08:50–14:05 lun–sáb).</p>';
+    return;
+  }
+  list.forEach((win, idx) => {
+    const row = document.createElement("div");
+    row.className = "schedule-window-row";
+    row.style.cssText =
+      "border:1px solid var(--border);border-radius:8px;padding:0.75rem;margin-bottom:0.5rem";
+    const days = win.days || [];
+    const dayChecks = SCHED_DAY_LABELS.map(
+      (d) =>
+        `<label style="margin-right:0.5rem;font-size:0.85rem"><input type="checkbox" data-day="${d.v}" ${days.includes(d.v) ? "checked" : ""}/> ${d.l}</label>`
+    ).join("");
+    row.innerHTML = `
+      <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.5rem">
+        <label>Inicio <input type="time" data-field="start" value="${win.start || "08:00"}" /></label>
+        <label>Fin <input type="time" data-field="end" value="${win.end || "18:00"}" /></label>
+        <button type="button" class="danger secondary" data-remove="${idx}">Quitar</button>
+      </div>
+      <div class="sched-days">${dayChecks}</div>
+    `;
+    root.appendChild(row);
+  });
+  root.querySelectorAll("[data-remove]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const i = parseInt(btn.dataset.remove, 10);
+      const next = collectScheduleFromUi().windows;
+      next.splice(i, 1);
+      renderScheduleWindows(next);
+    });
+  });
+}
+
+function collectScheduleFromUi() {
+  const enabled = $("#sched-enabled")?.checked ?? false;
+  const timezone = ($("#sched-timezone")?.value || "").trim();
+  const windows = [];
+  $$("#sched-windows .schedule-window-row").forEach((row) => {
+    const startRaw = row.querySelector('[data-field="start"]')?.value || "08:00";
+    const endRaw = row.querySelector('[data-field="end"]')?.value || "18:00";
+    const days = [];
+    row.querySelectorAll("[data-day]").forEach((cb) => {
+      if (cb.checked) days.push(parseInt(cb.dataset.day, 10));
+    });
+    windows.push({
+      start: startRaw.length === 5 ? startRaw : startRaw.slice(0, 5),
+      end: endRaw.length === 5 ? endRaw : endRaw.slice(0, 5),
+      days,
+    });
+  });
+  return { enabled, timezone, windows };
+}
+
+function updateScheduleStatusLine(status) {
+  const el = $("#sched-status-line");
+  if (!el || !status) return;
+  const active = status.is_active_now;
+  const badge = active
+    ? '<span class="badge ok">Activo ahora</span>'
+    : '<span class="badge warn">Inactivo ahora</span>';
+  const when = status.local_time
+    ? ` · ${status.weekday_label || ""} ${status.local_time.replace("T", " ")}`
+    : "";
+  el.innerHTML = `${badge}${when}`;
+}
+
+async function loadOperatingSchedule() {
+  try {
+    const data = await api("/api/v1/operating-schedule");
+    scheduleCache = data.schedule;
+    $("#sched-enabled").checked = !!data.schedule?.enabled;
+    $("#sched-timezone").value = data.schedule?.timezone || "";
+    renderScheduleWindows(data.schedule?.windows || []);
+    updateScheduleStatusLine(data.status);
+  } catch (err) {
+    $("#sched-status-line").textContent = err.message;
+  }
+}
+
+$("#btn-sched-add-window")?.addEventListener("click", () => {
+  const cur = collectScheduleFromUi().windows;
+  cur.push({
+    start: "08:50",
+    end: "14:05",
+    days: [0, 1, 2, 3, 4, 5],
+  });
+  renderScheduleWindows(cur);
+});
+
+$("#btn-sched-save")?.addEventListener("click", async () => {
+  const body = collectScheduleFromUi();
+  if (body.enabled && !body.windows.length) {
+    return toast("Añade al menos una franja o desactiva el horario", true);
+  }
+  for (const w of body.windows) {
+    if (!w.days.length) {
+      return toast("Cada franja debe tener al menos un día marcado", true);
+    }
+  }
+  try {
+    const r = await api("/api/v1/operating-schedule", { method: "PUT", json: body });
+    scheduleCache = r.schedule;
+    updateScheduleStatusLine(r.status);
+    toast("Horario guardado");
+    await loadCameras();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
 async function loadSystem() {
   try {
     const [cfg, sys, conn] = await Promise.all([
       api("/api/v1/config"),
       api("/api/v1/system/info"),
       api("/api/v1/connectivity/status").catch(() => ({ state: null })),
+      loadOperatingSchedule(),
     ]);
     $("#connectivity-info").textContent = JSON.stringify(conn, null, 2);
     $("#sys-device-name").textContent = sys.device_name || "—";

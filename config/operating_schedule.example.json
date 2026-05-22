@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "timezone": "Europe/Madrid",
+  "windows": [
+    {
+      "start": "08:50",
+      "end": "14:05",
+      "days": [0, 1, 2, 3, 4, 5]
+    },
+    {
+      "start": "16:55",
+      "end": "21:05",
+      "days": [0, 1, 2, 3, 4, 5]
+    }
+  ]
+}
