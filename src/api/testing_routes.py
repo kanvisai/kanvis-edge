@@ -43,7 +43,7 @@ def get_relay_manager(request: Request) -> RelayManager:
     return request.app.state.relay_manager
 
 
-def get_operating_schedule(request: Request) -> OperatingScheduleService:
+def get_schedule_service(request: Request) -> OperatingScheduleService:
     return request.app.state.operating_schedule_service
 
 
@@ -155,7 +155,7 @@ async def broadcast_start(
     camera_id: str,
     repo: Annotated[CameraRepository, Depends(get_repository)],
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
-    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
 ) -> dict:
     """Inicia rebroadcast RTSP (alias de relay/start para la UI de pruebas)."""
     require_operating_now(schedule_svc)
@@ -224,7 +224,7 @@ async def test_playback(
     dispatcher: Annotated[VideoDispatcher, Depends(get_dispatcher)],
     manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
     settings: Annotated[AppSettings, Depends(get_settings)],
-    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
 ) -> dict:
     require_operating_now(schedule_svc)
     """
@@ -268,7 +268,7 @@ async def test_playback_stream(
     dispatcher: Annotated[VideoDispatcher, Depends(get_dispatcher)],
     manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
     settings: Annotated[AppSettings, Depends(get_settings)],
-    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
     offset_sec: float = Query(default=3.0, ge=0.1, le=120),
     duration_sec: float | None = Query(default=None, ge=0.1, le=120),
     live_tail: bool = Query(default=False),

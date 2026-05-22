@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from src.api.dispatcher import VideoDispatcher
@@ -21,7 +21,7 @@ from src.relay.manager import RelayManager
 from src.webrtc.manager import WebRtcManager
 from src.relay.worker import _mask_url, build_relay_urls
 from src.discovery.models import ExternalAccessMode
-from src.schedule.models import OperatingSchedule
+from src.schedule.models import OperatingSchedule as OperatingSchedulePayload
 from src.schedule.service import OperatingScheduleService, require_operating_now
 from src.services.wan_sync import WanSyncService
 from src.brands import list_brand_slugs, load_brand_profile
@@ -62,7 +62,7 @@ def get_wan_sync(request: Request) -> WanSyncService | None:
     return getattr(request.app.state, "wan_sync_service", None)
 
 
-def get_operating_schedule(request: Request) -> OperatingScheduleService:
+def get_schedule_service(request: Request) -> OperatingScheduleService:
     return request.app.state.operating_schedule_service
 
 
@@ -72,8 +72,8 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/operating-schedule")
-async def get_operating_schedule(
-    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+async def read_operating_schedule(
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
 ) -> dict:
     """Horario de búfer/ingesta y broadcast (persistido en config/operating_schedule.json)."""
     sched = schedule_svc.get()
@@ -86,8 +86,8 @@ async def get_operating_schedule(
 
 @router.put("/operating-schedule")
 async def put_operating_schedule(
-    body: OperatingSchedule,
-    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+    body: Annotated[OperatingSchedulePayload, Body()],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
     consumer_manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
 ) -> dict:
@@ -331,7 +331,7 @@ async def delete_camera(
 async def stream_clip(
     camera_id: str,
     dispatcher: Annotated[VideoDispatcher, Depends(get_dispatcher)],
-    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
     pre_seconds: float | None = Query(default=None, ge=0.1, le=120),
     post_seconds: float | None = Query(default=None, ge=0, le=120),
 ) -> StreamingResponse:
@@ -360,7 +360,7 @@ async def playback(
     camera_id: str,
     dispatcher: Annotated[VideoDispatcher, Depends(get_dispatcher)],
     manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
-    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
     offset_sec: float | None = Query(default=None, ge=0.1, le=300),
     duration_sec: float | None = Query(default=None, ge=0.1, le=300),
     live_tail: bool = Query(default=False, description="Seguir con vídeo en vivo"),
@@ -545,7 +545,7 @@ async def relay_start(
     camera_id: str,
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
     repo: Annotated[CameraRepository, Depends(get_repository)],
-    schedule_svc: Annotated[OperatingScheduleService, Depends(get_operating_schedule)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
 ) -> dict:
     require_operating_now(schedule_svc)
     cam = await repo.get(camera_id)
