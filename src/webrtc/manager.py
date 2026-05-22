@@ -54,8 +54,13 @@ class WebRtcManager:
         buffer = self._consumers.get_buffer(camera_id)
         if not consumer or not buffer:
             raise KeyError(f"Cámara no activa (sin ingesta): {camera_id}")
+        video_codec = consumer.metrics.snapshot().get("video_codec")
         pub = WebRtcPublisher(
-            camera, self._settings, consumer.packet_bridge, buffer
+            camera,
+            self._settings,
+            consumer.packet_bridge,
+            buffer,
+            video_codec=video_codec,
         )
         self._publishers[camera_id] = pub
         return pub

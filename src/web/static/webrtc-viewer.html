@@ -133,8 +133,14 @@
         loginBox.classList.add("hidden");
         await KanvisWebRtcViewer.connect(cameraId, api, {
           video,
+          rewindSec: 3,
           onState: (s) => {
-            if (s === "connected") setStatus("WebRTC conectado.", "ok");
+            if (s === "video") setStatus("Recibiendo vídeo.", "ok");
+            else if (s === "connected")
+              setStatus(
+                "WebRTC conectado. Si sigue negro: activa broadcast con «Ingesta OK», espera 10 s, o usa RTSP si la cámara es H.265.",
+                "ok"
+              );
             else if (s === "failed" || s === "disconnected")
               setStatus("WebRTC " + s + " — comprueba broadcast activo e ingesta OK.", "err");
           },

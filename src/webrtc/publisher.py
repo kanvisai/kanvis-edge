@@ -83,11 +83,13 @@ class WebRtcPublisher:
         settings: AppSettings,
         packet_bridge: PacketBridge,
         buffer: PacketCircularBuffer,
+        video_codec: str | None = None,
     ) -> None:
         self._camera = camera
         self._settings = settings
         self._packet_bridge = packet_bridge
         self._buffer = buffer
+        self._video_codec = video_codec
         self._pc: RTCPeerConnection | None = None
         self._track: H264PacketVideoTrack | None = None
         self._live_queue: asyncio.Queue | None = None
@@ -118,6 +120,7 @@ class WebRtcPublisher:
                 self._live_queue,
                 self._buffer,
                 target_fps=self._camera.source.fps,
+                video_codec=self._video_codec,
             )
         return self._track
 
@@ -129,6 +132,14 @@ class WebRtcPublisher:
             await self.close()
             self._pc = _new_peer_connection(self._camera)
             track = self._ensure_track()
+            primed = await track.prime_from_buffer(
+                self._camera.output.webrtc.rewind_offset_sec
+            )
+            if primed == 0:
+                logger.warning(
+                    "WebRTC %s: búfer vacío al conectar; espera ingesta RTSP",
+                    self.camera_id,
+                )
             self._pc.addTrack(track)
             await self._pc.setRemoteDescription(
                 RTCSessionDescription(sdp=sdp, type=sdp_type)

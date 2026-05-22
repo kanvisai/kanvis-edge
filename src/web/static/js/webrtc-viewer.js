@@ -75,7 +75,13 @@
       const stream = ev.streams[0] || new MediaStream([ev.track]);
       video.srcObject = stream;
       video.classList.remove("hidden");
-      video.play().catch(() => {});
+      video.playsInline = true;
+      video.muted = true;
+      const play = () => video.play().catch(() => {});
+      play();
+      video.onloadeddata = () => {
+        if (onStateCb) onStateCb("video");
+      };
       startDisplayFps(video);
     };
 
@@ -96,6 +102,9 @@
 
     await pc.setRemoteDescription({ type: answer.type, sdp: answer.sdp });
     notifyState();
+    try {
+      await rewind(cameraId, options.rewindSec ?? 3, apiFn);
+    } catch (_) {}
   }
 
   async function disconnect(apiFn, cameraId) {

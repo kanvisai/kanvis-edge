@@ -1410,8 +1410,17 @@ async function toggleBroadcast(device, cam, card) {
         const video = card.querySelector("video");
         await KanvisWebRtcViewer.connect(cameraId, api, {
           video,
+          rewindSec: PLAYBACK_OFFSET_SEC,
           onState: (s) => {
-            if (s === "connected") setActionMsg(bcMsg, "WebRTC conectado. Rellenando búfer…", "ok");
+            if (s === "video") {
+              setActionMsg(bcMsg, "WebRTC: recibiendo vídeo.", "ok");
+            } else if (s === "connected") {
+              setActionMsg(
+                bcMsg,
+                "WebRTC conectado. Si la pantalla sigue negra: comprueba «Ingesta OK», códec H.264 (WebRTC) o usa RTSP relay.",
+                "ok"
+              );
+            }
           },
         });
         video?.classList.remove("hidden");
