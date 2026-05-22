@@ -8,7 +8,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 import httpx
-from aiortc import RTCIceServer, RTCPeerConnection, RTCConfiguration, RTCSessionDescription
+from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
+
+try:
+    from aiortc import RTCBundlePolicy
+except ImportError:  # aiortc < 1.11
+    RTCBundlePolicy = None  # type: ignore[misc, assignment]
 from src.config_loader import AppSettings
 from src.discovery.models import CameraRecord, CameraWebRTCOutput
 from src.ingestion.buffer import PacketCircularBuffer
@@ -42,10 +47,27 @@ def webrtc_mode(cfg: CameraWebRTCOutput) -> WebRtcMode:
 
 
 def _rtc_configuration(camera: CameraRecord) -> RTCConfiguration:
+    """aiortc >=1.11 exige RTCConfiguration (no dict) con bundlePolicy."""
     urls = [u for u in camera.output.webrtc.stun_urls if u.strip()]
     if not urls:
         urls = ["stun:stun.l.google.com:19302"]
-    return RTCConfiguration(iceServers=[RTCIceServer(urls=urls)])
+    ice_url: str | list[str] = urls[0] if len(urls) == 1 else urls
+    ice_servers = [RTCIceServer(urls=ice_url)]
+    if RTCBundlePolicy is not None:
+        return RTCConfiguration(
+            iceServers=ice_servers,
+            bundlePolicy=RTCBundlePolicy.MAX_BUNDLE,
+        )
+    return RTCConfiguration(iceServers=ice_servers)
+
+
+def _new_peer_connection(camera: CameraRecord) -> RTCPeerConnection:
+    configuration = _rtc_configuration(camera)
+    if isinstance(configuration, dict):
+        raise TypeError(
+            "RTCPeerConnection requiere RTCConfiguration, no dict (actualiza aiortc)"
+        )
+    return RTCPeerConnection(configuration)
 
 
 class WebRtcPublisher:
@@ -101,7 +123,7 @@ class WebRtcPublisher:
         """WHEP-like: cliente envía offer, devolvemos answer con vídeo del búfer."""
         async with self._lock:
             await self.close()
-            self._pc = RTCPeerConnection(configuration=_rtc_configuration(self._camera))
+            self._pc = _new_peer_connection(self._camera)
             track = self._ensure_track()
             self._pc.addTrack(track)
             await self._pc.setRemoteDescription(
@@ -120,7 +142,7 @@ class WebRtcPublisher:
 
         async with self._lock:
             await self.close()
-            self._pc = RTCPeerConnection(configuration=_rtc_configuration(self._camera))
+            self._pc = _new_peer_connection(self._camera)
             track = self._ensure_track()
             self._pc.addTrack(track)
             offer = await self._pc.createOffer()

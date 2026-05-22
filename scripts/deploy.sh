@@ -62,6 +62,12 @@ if [[ -f "${REPO_ROOT}/src/main.py" ]]; then
     "${REPO_ROOT}/" "${INSTALL_ROOT}/"
   chown -R kanvis:kanvis "${INSTALL_ROOT}" 2>/dev/null || chown -R "${KANVIS_USER:-kanvis}:${KANVIS_USER:-kanvis}" "${INSTALL_ROOT}"
   ui_ok "Código actualizado"
+  KANVIS_USER="${KANVIS_USER:-kanvis}"
+  if [[ -f "${INSTALL_ROOT}/requirements.txt" ]]; then
+    ui_detail "Actualizando dependencias Python (aiortc, etc.)…"
+    sudo -u "$KANVIS_USER" "${INSTALL_ROOT}/.venv/bin/pip" install -q -r "${INSTALL_ROOT}/requirements.txt"
+    ui_ok "Dependencias actualizadas"
+  fi
 else
   ui_detail "Sin repo adjunto; se usa la instalación existente"
 fi
