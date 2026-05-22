@@ -62,20 +62,41 @@ need_root() {
   fi
 }
 
+# Escapa sustitución en sed (delimitador |).
+_sed_repl() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//|/\\|}"
+  s="${s//&/\\&}"
+  printf '%s' "$s"
+}
+
 render_template() {
   local template="$1" dest="$2"
-  local wpa_block=""
-  if [[ -n "${AP_PASSWORD}" ]]; then
-    wpa_block=$'wpa=2\nwpa_key_mgmt=WPA-PSK\nwpa_passphrase='"${AP_PASSWORD}"$'\nrsn_pairwise=CCMP'
-  fi
-  sed -e "s|@WLAN_INTERFACE@|${WLAN_INTERFACE}|g" \
-      -e "s|@AP_SSID@|${AP_SSID}|g" \
-      -e "s|@AP_CHANNEL@|${AP_CHANNEL}|g" \
-      -e "s|@AP_IP@|${AP_IP}|g" \
-      -e "s|@DHCP_START@|${DHCP_START}|g" \
-      -e "s|@DHCP_END@|${DHCP_END}|g" \
-      -e "s|@WPA_BLOCK@|${wpa_block}|g" \
+  local iface ssid ch ip dstart dend
+  iface="$(_sed_repl "$WLAN_INTERFACE")"
+  ssid="$(_sed_repl "$AP_SSID")"
+  ch="$(_sed_repl "$AP_CHANNEL")"
+  ip="$(_sed_repl "$AP_IP")"
+  dstart="$(_sed_repl "$DHCP_START")"
+  dend="$(_sed_repl "$DHCP_END")"
+  # @WPA_BLOCK@ no puede ir en sed: contiene varias líneas → rompe sed (char 19 unterminated `s').
+  sed -e "s|@WLAN_INTERFACE@|${iface}|g" \
+      -e "s|@AP_SSID@|${ssid}|g" \
+      -e "s|@AP_CHANNEL@|${ch}|g" \
+      -e "s|@AP_IP@|${ip}|g" \
+      -e "s|@DHCP_START@|${dstart}|g" \
+      -e "s|@DHCP_END@|${dend}|g" \
+      -e '/^@WPA_BLOCK@$/d' \
       "$template" > "$dest"
+  if [[ -n "${AP_PASSWORD}" ]]; then
+    {
+      echo "wpa=2"
+      echo "wpa_key_mgmt=WPA-PSK"
+      printf 'wpa_passphrase=%s\n' "$AP_PASSWORD"
+      echo "rsn_pairwise=CCMP"
+    } >> "$dest"
+  fi
 }
 
 iface_exists() {
