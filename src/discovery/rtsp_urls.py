@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
 
@@ -87,7 +87,7 @@ def build_camera_rtsp_url(
             channel=source.channel or "101",
         )
         if mode == "playback" and (starttime is None or endtime is None):
-            now = datetime.now(UTC)
+            now = datetime.now(timezone.utc)
             offset = source.time_offset_minutes
             endtime = endtime or now
             starttime = starttime or (now - timedelta(seconds=30))

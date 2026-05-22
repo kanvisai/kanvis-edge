@@ -213,9 +213,9 @@ class CameraRecord(BaseModel):
             out["edge_stream"] = build_camera_rtsp_url(
                 self, mode="stream", target="edge", settings=settings
             )
-            from datetime import UTC, datetime, timedelta
+            from datetime import datetime, timedelta, timezone
 
-            now = datetime.now(UTC)
+            now = datetime.now(timezone.utc)
             out["device_playback"] = build_camera_rtsp_url(
                 self,
                 mode="playback",

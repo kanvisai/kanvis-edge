@@ -13,7 +13,7 @@ Guía completa para desplegar **Kanvis Edge** en un cacharro Linux en tienda (De
 | Requisito | Detalle |
 |-----------|---------|
 | SO | Debian 12, Raspberry Pi OS (Bookworm) o Ubuntu Server reciente |
-| Python | 3.11+ (lo instala `preflight --install`) |
+| Python | 3.10+ (lo instala `preflight --install`; Debian 12 suele traer 3.11) |
 | Red | **Ethernet** al router de tienda (recomendado para operación y SSH) |
 | WiFi | Interfaz con modo AP (`iw list` → *Supported interface modes* incluye **AP**) |
 | Acceso | Teclado/monitor la primera vez, o SSH tras configurar red |
@@ -418,6 +418,7 @@ journalctl -u kanvis-edge -n 50 --no-pager
 | Panel no abre / móvil en AP sin respuesta | Ver sección **Panel no carga** abajo |
 | Deploy: «La API no responde» | Es la API **local** (`kanvis-edge`), no el backend nube. `journalctl -u kanvis-edge -n 50` |
 | `status=226/NAMESPACE` en kanvis-edge | Actualiza `kanvis-edge.service` (sin sandbox systemd) y `daemon-reload` |
+| `ImportError: cannot import name 'UTC' from 'datetime'` | Python 3.10: actualiza código (`timezone.utc`) y `rsync` a `/opt/kanvis-edge` |
 | Sin WiFi `kanvis-XXXX` | `iw list` (modo AP); `journalctl -u kanvis-network` |
 | `.env` y `/etc/.../env` distintos | Un solo fichero: edita `/etc/kanvis-edge/env`; verifica el enlace en `/opt` |
 | Línea suelta en env → `command not found` | Cada línea debe ser `CLAVE=valor` (tokens sin `CLOUD_ACCESS_TOKEN=` rompen scripts) |

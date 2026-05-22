@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 _TIME_FORMAT_TO_STRFTIME: dict[str, str] = {
     "YYYY-MM-DDTHH:mm:ss[Z]": "%Y-%m-%dT%H:%M:%SZ",
@@ -30,9 +30,9 @@ def format_instant(
     time_offset_minutes: float = 0.0,
 ) -> str:
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
+        dt = dt.replace(tzinfo=timezone.utc)
     if time_offset_minutes:
         dt = dt + timedelta(minutes=float(time_offset_minutes))
     if requires_utc:
-        dt = dt.astimezone(UTC)
+        dt = dt.astimezone(timezone.utc)
     return dt.strftime(strftime_pattern(time_format))

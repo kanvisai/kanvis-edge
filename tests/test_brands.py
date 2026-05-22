@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.brands import (
@@ -55,7 +55,7 @@ def test_render_annke_playback_utc() -> None:
         port=554,
         channel="101",
     )
-    start = datetime(2024, 6, 1, 10, 0, 0, tzinfo=UTC)
+    start = datetime(2024, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
     end = start + timedelta(minutes=5)
     url = render_rtsp_url(
         profile,
