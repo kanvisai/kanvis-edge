@@ -165,13 +165,17 @@ La misma sesión JWT sirve para las llamadas API desde el panel. La nube sigue u
 
 ### Hardware autónomo (Fase 5) — o Docker, no ambos
 
-**En el cacharro de tienda (con WiFi `kanvis-XXXX`):**
+**En el cacharro de tienda:**
 
 ```bash
 ./scripts/preflight.sh && sudo ./scripts/preflight.sh --install
 sudo ./scripts/install.sh
-sudo ./scripts/deploy.sh    # pausa para editar .env, luego arranca
+sudo nano /etc/kanvis-edge/env   # un solo fichero de config (ver guía)
+sudo /opt/kanvis-edge/scripts/deploy.sh
 ```
+
+- Guía paso a paso (ficheros, red, uninstall, horario): [`docs/INSTALACION_PASO_A_PASO.md`](docs/INSTALACION_PASO_A_PASO.md)
+- Resumen hardware: [`docs/INSTALACION_HARDWARE.md`](docs/INSTALACION_HARDWARE.md)
 
 **Solo pruebas con Docker** (sin AP): `docker compose up -d` — ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 
@@ -192,9 +196,8 @@ DEVICE_ID=tienda-001
 - `POST /api/v1/connectivity/sync` — forzar actualización
 - Puertos en router: [`docs/PORT_FORWARDING.md`](docs/PORT_FORWARDING.md)
 
-- WiFi: **`kanvis-XXXX`** (XXXX = id del dispositivo)
-- Panel: **`http://192.168.192.192:8000/`**
-- Guía completa: [`docs/INSTALACION_HARDWARE.md`](docs/INSTALACION_HARDWARE.md)
+- WiFi instalación: **`kanvis-XXXX`** (XXXX = `DEVICE_ID`)
+- Panel: **`http://<IP-LAN>:8000/`** o **`http://192.168.192.192:8000/`** (modo AP)
 
 Brecha vs roadmap: `docs/GAP_MATRIX.md`.
 
