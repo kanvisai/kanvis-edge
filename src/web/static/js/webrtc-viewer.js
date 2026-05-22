@@ -65,8 +65,11 @@
       typeof u === "string" ? { urls: u } : u
     );
 
-    pc = new RTCPeerConnection({ iceServers });
-    pc.addTransceiver("video", { direction: "recvonly" });
+    pc = new RTCPeerConnection({
+      iceServers,
+      bundlePolicy: "max-bundle",
+      rtcpMuxPolicy: "require",
+    });
 
     pc.ontrack = (ev) => {
       const stream = ev.streams[0] || new MediaStream([ev.track]);
@@ -79,7 +82,7 @@
     pc.onconnectionstatechange = () => notifyState();
     pc.oniceconnectionstatechange = () => notifyState();
 
-    const offer = await pc.createOffer();
+    const offer = await pc.createOffer({ offerToReceiveVideo: true });
     await pc.setLocalDescription(offer);
     await waitIceGathering(pc);
 

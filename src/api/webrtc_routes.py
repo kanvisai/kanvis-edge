@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -12,7 +13,26 @@ from src.ingestion.consumer import StreamConsumerManager
 from src.relay.manager import RelayManager
 from src.webrtc.manager import WebRtcManager
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/webrtc", tags=["webrtc"])
+
+
+def _webrtc_http_error(exc: Exception, camera_id: str) -> HTTPException:
+    msg = str(exc).strip() or type(exc).__name__
+    low = msg.lower()
+    if "sin ingesta" in low or "no activa" in low:
+        return HTTPException(
+            status_code=503,
+            detail="Ingesta no lista; activa broadcast y espera unos segundos",
+        )
+    if "bundle" in low or "policy" in low:
+        return HTTPException(
+            status_code=400,
+            detail=f"Negociación WebRTC fallida (SDP/bundle): {msg}",
+        )
+    logger.exception("WHEP offer falló para %s", camera_id)
+    return HTTPException(status_code=500, detail=f"Error WebRTC: {msg}")
 
 
 class SdpPayload(BaseModel):
@@ -57,8 +77,10 @@ async def whep_offer(
         answer = await manager.handle_whep_offer(camera_id, body.sdp, body.type)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise _webrtc_http_error(exc, camera_id) from exc
     return SdpPayload(sdp=answer["sdp"], type=answer["type"])
 
 

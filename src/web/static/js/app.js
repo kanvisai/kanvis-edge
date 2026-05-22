@@ -32,6 +32,26 @@ function toast(msg, isErr = false) {
   setTimeout(() => el.classList.add("hidden"), 4000);
 }
 
+function formatApiDetail(detail) {
+  if (detail == null) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => {
+        if (typeof e === "string") return e;
+        const loc = Array.isArray(e.loc) ? e.loc.join(".") : "";
+        return e.msg ? `${loc}: ${e.msg}` : JSON.stringify(e);
+      })
+      .join(" · ");
+  }
+  if (typeof detail === "object" && detail.msg) return detail.msg;
+  try {
+    return JSON.stringify(detail);
+  } catch {
+    return String(detail);
+  }
+}
+
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   const token = getToken();
@@ -49,9 +69,9 @@ async function api(path, opts = {}) {
     let detail = res.statusText;
     try {
       const j = await res.json();
-      detail = j.detail || JSON.stringify(j);
+      detail = formatApiDetail(j.detail ?? j.message ?? j);
     } catch (_) {}
-    throw new Error(`HTTP ${res.status} · ${detail}`);
+    throw new Error(detail ? `${detail} (HTTP ${res.status})` : `HTTP ${res.status}`);
   }
   if (res.status === 204) return null;
   const ct = res.headers.get("content-type") || "";
@@ -389,35 +409,54 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;");
 }
 
+function updateBroadcastModeUi(card, mode) {
+  const label = card?.querySelector("[data-bc-override-label]");
+  if (!label) return;
+  label.textContent =
+    mode === "webrtc"
+      ? "Otros datos de ingesta (RTSP origen)"
+      : "Otros datos RTSP al activar broadcast";
+}
+
 function renderConnectionHints(el, info, mode) {
   if (!el || !info) return;
   const s = info.source || {};
-  let html = `<p class="section-label">Cómo probar desde fuera</p>`;
-  html += `<div class="conn-block"><strong>Origen (cámara)</strong><pre class="conn-pre">${escapeHtml(
-    info.device_rtsp_masked || "—"
-  )}\n\n${escapeHtml(s.mpv || "")}</pre></div>`;
+  const originRtsp = s.rtsp_url || info.device_rtsp_masked || "—";
+  let html = `<p class="section-label">Datos de conexión</p>`;
+  html += `<div class="conn-block"><strong>Origen cámara (RTSP)</strong><pre class="conn-pre">${escapeHtml(
+    originRtsp
+  )}</pre><p class="hint">${escapeHtml(s.mpv || "")}</p></div>`;
+
   if (mode === "rtsp") {
-    if (info.relay?.url_lan) {
-      html += `<div class="conn-block"><strong>Broadcast RTSP</strong><pre class="conn-pre">LAN: ${escapeHtml(
-        info.relay.url_lan
-      )}\nEn el guardia: ${escapeHtml(info.relay.url_local || "")}\n\n${escapeHtml(
-        info.relay.mpv || ""
-      )}</pre><p class="hint">Otro PC en la misma red: mpv/vlc con URL LAN. Desde internet: reenvío de puerto ${info.relay.listen_port || "?"} al guardia.</p></div>`;
-    } else if (info.relay?.enabled) {
-      html += `<p class="hint">Activa broadcast RTSP para ver la URL.</p>`;
+    const r = info.relay?.url_lan ? info.relay : info.relay_preview;
+    if (r?.url_lan) {
+      const running = r.running || info.relay?.running;
+      html += `<div class="conn-block"><strong>Broadcast RTSP (relay)</strong><pre class="conn-pre">${escapeHtml(
+        r.url_lan
+      )}\nEn el guardia: ${escapeHtml(r.url_local || "")}</pre><p class="hint">${escapeHtml(
+        r.mpv || ""
+      )}</p>`;
+      if (!running) {
+        html += `<p class="hint">Activa broadcast para que el relay escuche en el puerto ${escapeHtml(
+          String(r.listen_port || "?")
+        )}.</p>`;
+      } else {
+        html += `<p class="hint">Relay activo — prueba con mpv/vlc en la misma LAN.</p>`;
+      }
+      html += `</div>`;
+    } else if (r?.error) {
+      html += `<p class="hint err-text">${escapeHtml(r.error)}</p>`;
     }
+  } else {
+    const w = info.webrtc || {};
+    html += `<div class="conn-block"><strong>WebRTC (visor WHEP)</strong><pre class="conn-pre">POST ${escapeHtml(
+      w.whep_offer_url || "—"
+    )}\nContent-Type: application/json\nBody: {"sdp":"&lt;offer&gt;","type":"offer"}\nAuthorization: Bearer &lt;token del login&gt;\n\nVisor en panel: ${escapeHtml(
+      w.panel_url || ""
+    )}\nEstado: ${escapeHtml(w.status_url || "")}</pre><p class="hint">${escapeHtml(
+      w.hint_panel || ""
+    )} ${escapeHtml(w.hint_external || "")}</p></div>`;
   }
-  if (mode === "webrtc" && info.webrtc) {
-    const w = info.webrtc;
-    html += `<div class="conn-block"><strong>WebRTC (WHEP)</strong><pre class="conn-pre">POST ${escapeHtml(
-      w.whep_offer_url
-    )}\nBody: {"sdp":"...","type":"offer"}\nAuthorization: Bearer &lt;token&gt;\n\nPanel: ${escapeHtml(
-      w.panel_url
-    )}\n\n${escapeHtml(w.hint_external || "")}</pre></div>`;
-  }
-  html += `<p class="hint">Guardado en ${escapeHtml(info.storage?.backend || "?")}: ${escapeHtml(
-    info.storage?.path || ""
-  )}</p>`;
   el.innerHTML = html;
 }
 
@@ -447,7 +486,7 @@ function readBroadcastOverride(device, cam, card) {
   }
   return {
     host: card.querySelector(".ov-host")?.value?.trim() || device.host,
-    port: card.querySelector(".ov-port")?.value || device.port,
+    port: parseInt(card.querySelector(".ov-port")?.value, 10) || device.port || 554,
     username: card.querySelector(".ov-user")?.value || device.username,
     password: card.querySelector(".ov-pass")?.value ?? device.password,
     brand: card.querySelector(".ov-brand")?.value || device.brand,
@@ -477,7 +516,8 @@ function renderChannelPanel(device, chState, root) {
       <label class="mode-opt"><input type="radio" name="bc-mode-${cameraId}" value="webrtc" ${mode === "webrtc" ? "checked" : ""}/> WebRTC</label>
     </div>
     <label class="check-row">
-      <input type="checkbox" data-bc-override="" /> Otros datos RTSP al activar broadcast
+      <input type="checkbox" data-bc-override="" />
+      <span data-bc-override-label="">Otros datos RTSP al activar broadcast</span>
     </label>
     <div class="override-fields hidden">
       <div class="field-grid">
@@ -507,9 +547,11 @@ function renderChannelPanel(device, chState, root) {
   card.querySelectorAll(`input[name="bc-mode-${cameraId}"]`).forEach((r) => {
     r.addEventListener("change", () => {
       device.broadcastMode = r.value;
+      updateBroadcastModeUi(card, r.value);
       loadAccessInfo(cameraId, card);
     });
   });
+  updateBroadcastModeUi(card, mode);
   card.querySelector("[data-toggle-bc]")?.addEventListener("click", () =>
     toggleBroadcast(device, cam, card)
   );
@@ -796,7 +838,7 @@ async function refreshChannelStatus(cameraId, card) {
       playbackBtn.disabled = !bcOn || span < PLAYBACK_OFFSET_SEC * 0.85;
     }
     card.dataset.broadcastOn = bcOn ? "1" : "0";
-    if (bcOn) loadAccessInfo(cameraId, card);
+    loadAccessInfo(cameraId, card);
   } catch {
     badge.innerHTML = '<span class="badge muted">Sin guardar / inactiva</span>';
     if (toggle) {
@@ -805,6 +847,18 @@ async function refreshChannelStatus(cameraId, card) {
     }
     if (playbackBtn) playbackBtn.disabled = true;
   }
+}
+
+async function waitForIngest(cameraId, maxMs = 15000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxMs) {
+    const st = await api(`/api/v1/cameras/${cameraId}/status`);
+    if (st.ingest?.connected) return st;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(
+    "La ingesta no arrancó; revisa IP, canal, marca y credenciales de la cámara"
+  );
 }
 
 async function toggleBroadcast(device, cam, card) {
@@ -839,7 +893,12 @@ async function toggleBroadcast(device, cam, card) {
         mode === "webrtc"
           ? `/api/v1/cameras/${cameraId}/broadcast/start?mode=webrtc`
           : `/api/v1/cameras/${cameraId}/broadcast/start`;
-      await api(url, { method: "POST" });
+      const startRes = await api(url, { method: "POST" });
+      if (mode === "webrtc" && startRes?.ingest_ready === false) {
+        await waitForIngest(cameraId);
+      } else if (mode === "webrtc") {
+        await waitForIngest(cameraId, 8000).catch(() => {});
+      }
 
       if (mode === "webrtc") {
         const video = card.querySelector("video");

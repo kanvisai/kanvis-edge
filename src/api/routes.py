@@ -81,7 +81,7 @@ def get_schedule_service(request: Request) -> OperatingScheduleService:
 async def health() -> dict:
     return {
         "status": "ok",
-        "ui_version": "2025-05-rtsp-probe-tools",
+        "ui_version": "2025-05-broadcast-conn-hints",
         "features": {
             "rtsp_probe_tools": True,
             "rtsp_probe_paths": [
@@ -425,29 +425,35 @@ async def camera_access_info(
         "channel": camera.source.channel,
         "brand": camera.source.brand or "",
         "transport": camera.source.transport or "tcp",
+        "rtsp_url": device_rtsp or device_rtsp_masked,
         "mpv": mpv_device,
     }
 
+    relay = relay_manager.get_relay(camera_id)
+    listen_port = relay_manager.get_listen_port(camera_id) or camera.output.relay.listen_port
+    relay_preview: dict | None = None
+    try:
+        _, out_url = build_relay_urls(camera, settings, listen_port)
+        local_url = local_listen_url(out_url)
+        lan_url = out_url.replace("0.0.0.0", lan_ip).replace("127.0.0.1", lan_ip)
+        relay_preview = {
+            "listen_port": listen_port,
+            "url_local": local_url,
+            "url_lan": lan_url,
+            "url_masked": _mask_url(out_url),
+            "mpv": f'mpv --rtsp-transport=tcp "{lan_url}"',
+            "vlc": f'vlc "{lan_url}"',
+            "running": relay.is_running if relay else False,
+        }
+    except ValueError as exc:
+        relay_preview = {"error": str(exc)}
+
     relay_block: dict | None = None
     if camera.output.relay.enabled:
-        relay = relay_manager.get_relay(camera_id)
-        listen_port = relay_manager.get_listen_port(camera_id) or camera.output.relay.listen_port
-        try:
-            _, out_url = build_relay_urls(camera, settings, listen_port)
-            local_url = local_listen_url(out_url)
-            lan_url = out_url.replace("0.0.0.0", lan_ip).replace("127.0.0.1", lan_ip)
-            relay_block = {
-                "enabled": True,
-                "running": relay.is_running if relay else False,
-                "listen_port": listen_port,
-                "url_local": local_url,
-                "url_lan": lan_url,
-                "url_masked": _mask_url(out_url),
-                "mpv": f'mpv --rtsp-transport=tcp "{lan_url}"',
-                "vlc": f'vlc "{lan_url}"',
-            }
-        except ValueError as exc:
-            relay_block = {"enabled": True, "error": str(exc)}
+        if relay_preview and "error" not in relay_preview:
+            relay_block = {"enabled": True, **relay_preview}
+        elif relay_preview:
+            relay_block = {"enabled": True, **relay_preview}
 
     webrtc_block = {
         "enabled": camera.output.webrtc.enabled,
@@ -478,6 +484,7 @@ async def camera_access_info(
         "source": source_block,
         "device_rtsp_masked": device_rtsp_masked,
         "relay": relay_block,
+        "relay_preview": relay_preview,
         "webrtc": webrtc_block,
         "broadcast_status_url": f"{api_base}/api/v1/cameras/{camera_id}/broadcast/status",
     }

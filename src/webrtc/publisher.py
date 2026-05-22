@@ -6,10 +6,9 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 import httpx
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import RTCIceServer, RTCPeerConnection, RTCConfiguration, RTCSessionDescription
 from src.config_loader import AppSettings
 from src.discovery.models import CameraRecord, CameraWebRTCOutput
 from src.ingestion.buffer import PacketCircularBuffer
@@ -42,11 +41,11 @@ def webrtc_mode(cfg: CameraWebRTCOutput) -> WebRtcMode:
         return WebRtcMode.WHEP
 
 
-def _rtc_configuration(camera: CameraRecord) -> dict[str, Any]:
-    ice_servers = [
-        {"urls": url} for url in camera.output.webrtc.stun_urls if url.strip()
-    ]
-    return {"iceServers": ice_servers or [{"urls": "stun:stun.l.google.com:19302"}]}
+def _rtc_configuration(camera: CameraRecord) -> RTCConfiguration:
+    urls = [u for u in camera.output.webrtc.stun_urls if u.strip()]
+    if not urls:
+        urls = ["stun:stun.l.google.com:19302"]
+    return RTCConfiguration(iceServers=[RTCIceServer(urls=urls)])
 
 
 class WebRtcPublisher:

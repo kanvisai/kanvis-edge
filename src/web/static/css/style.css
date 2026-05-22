@@ -372,6 +372,10 @@ button:disabled {
   margin: 0 0 0.75rem;
 }
 
+.hint.err-text {
+  color: var(--err);
+}
+
 .probe-box {
   background: var(--bg);
   border: 1px dashed var(--border);

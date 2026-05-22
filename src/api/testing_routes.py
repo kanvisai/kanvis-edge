@@ -79,6 +79,19 @@ async def _start_broadcast_ingest(
     await manager.set_broadcast_ingest(camera_id, True, loop)
 
 
+async def _wait_ingest_ready(
+    camera_id: str,
+    manager: StreamConsumerManager,
+    timeout_sec: float = 12.0,
+) -> bool:
+    deadline = asyncio.get_running_loop().time() + timeout_sec
+    while asyncio.get_running_loop().time() < deadline:
+        if manager.get_consumer(camera_id) and manager.get_buffer(camera_id):
+            return True
+        await asyncio.sleep(0.25)
+    return False
+
+
 async def _stop_broadcast_ingest(
     camera_id: str,
     manager: StreamConsumerManager,
@@ -222,11 +235,13 @@ async def broadcast_start(
     if not cam:
         raise HTTPException(status_code=404, detail="Cámara no encontrada")
     await _start_broadcast_ingest(camera_id, manager)
+    ingest_ready = await _wait_ingest_ready(camera_id, manager)
     buf = manager.get_buffer(camera_id)
     out: dict = {
         "broadcast": "started",
         "camera_id": camera_id,
         "mode": mode,
+        "ingest_ready": ingest_ready,
         "buffer_span_seconds": round(buf.span_seconds(), 2) if buf else 0,
     }
     if mode == "webrtc":
@@ -234,6 +249,13 @@ async def broadcast_start(
             raise HTTPException(
                 status_code=400,
                 detail="Configura modo WebRTC antes de activar broadcast",
+            )
+        if not ingest_ready:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No arrancó la ingesta RTSP; revisa IP, canal, marca y credenciales"
+                ),
             )
         out["hint"] = "Búfer en marcha; conecta WebRTC o usa snapshot/buffer para prueba"
         return out
