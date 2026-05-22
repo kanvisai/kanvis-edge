@@ -82,7 +82,7 @@ async def _start_broadcast_ingest(
 async def _wait_ingest_ready(
     camera_id: str,
     manager: StreamConsumerManager,
-    timeout_sec: float = 20.0,
+    timeout_sec: float = 40.0,
 ) -> dict:
     """Espera hilo de ingesta + RTSP conectado + primeros paquetes en búfer."""
     deadline = asyncio.get_running_loop().time() + timeout_sec
@@ -287,11 +287,14 @@ async def broadcast_start(
             )
         if not ingest_ok:
             err = out.get("ingest_last_error") or "sin conexión RTSP a la cámara"
+            thread = "sí" if ingest_state.get("thread_started") else "no"
             raise HTTPException(
                 status_code=503,
                 detail=(
                     f"Ingesta RTSP no recibe vídeo (búfer {out['buffer_span_seconds']}s). "
-                    f"La cámara es la fuente: prueba «Probar conexión» arriba. Último error: {err}"
+                    f"Hilo ingesta: {thread}. URL origen: {source_rtsp}. "
+                    f"Si «Probar conexión» funciona, guarda de nuevo la cámara con contraseña "
+                    f"o desmarca «Otros datos» si repites los mismos campos. Último error: {err}"
                 ),
             )
         out["hint"] = "Búfer en marcha; conecta WebRTC o usa snapshot/buffer para prueba"

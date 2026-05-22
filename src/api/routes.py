@@ -756,7 +756,10 @@ async def update_camera(
     patch["camera_id"] = camera_id
     for key in ("source", "buffer"):
         if patch.get(key):
-            data[key] = {**data.get(key, {}), **patch[key]}
+            merged = {**data.get(key, {}), **patch[key]}
+            if key == "source" and not str(merged.get("password") or "").strip():
+                merged.pop("password", None)
+            data[key] = merged
     if patch.get("output"):
         existing_out = data.get("output", {})
         patch_out = patch["output"]

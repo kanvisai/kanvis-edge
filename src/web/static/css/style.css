@@ -372,6 +372,33 @@ button:disabled {
   margin: 0 0 0.75rem;
 }
 
+.action-msg {
+  margin: 0.5rem 0 0;
+  padding: 0.65rem 0.75rem;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.action-msg.ok {
+  color: #3dd68c;
+  border-color: rgba(61, 214, 140, 0.35);
+  background: rgba(61, 214, 140, 0.08);
+}
+
+.action-msg.err {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.08);
+}
+
 .hint.err-text {
   color: var(--err);
 }

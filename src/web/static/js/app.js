@@ -32,6 +32,39 @@ function toast(msg, isErr = false) {
   setTimeout(() => el.classList.add("hidden"), 4000);
 }
 
+/** Mensaje fijo copiable (verde=ok, rojo=error) debajo de botones de acción. */
+function setActionMsg(el, text, kind = "") {
+  if (!el) return;
+  const t = text == null ? "" : String(text);
+  el.textContent = t;
+  el.classList.remove("ok", "err", "hidden");
+  if (!t) {
+    el.classList.add("hidden");
+    return;
+  }
+  if (kind === "ok") el.classList.add("ok");
+  else if (kind === "err") el.classList.add("err");
+}
+
+function syncDeviceCredsFromDom(device) {
+  const panel = document.querySelector(`.device-card[data-device-key="${device.key}"]`);
+  if (!panel) return;
+  const pass = panel.querySelector(".dev-pass")?.value;
+  if (pass != null && pass !== "") device.password = pass;
+  const user = panel.querySelector(".dev-user")?.value;
+  if (user != null) device.username = user;
+}
+
+function resolveRtspPassword(device, cam, card) {
+  const ov = card?.querySelector("[data-bc-override]")?.checked;
+  if (ov) {
+    const p = card.querySelector(".ov-pass")?.value;
+    if (p) return p;
+  }
+  syncDeviceCredsFromDom(device);
+  return device.password || cam?.source?.password || "";
+}
+
 function formatApiDetail(detail) {
   if (detail == null) return "";
   if (typeof detail === "string") return detail;
@@ -761,6 +794,7 @@ function renderChannelPanel(device, chState, root) {
       </div>
     </div>
     <button type="button" class="btn-block btn-toggle-bc off" data-toggle-bc="">Activar broadcast</button>
+    <pre class="action-msg hidden" data-bc-msg="" aria-live="polite"></pre>
     <p class="buf-hint hint">El búfer solo se rellena con broadcast activo.</p>
     <button type="button" class="btn-block secondary" data-playback-test="" disabled>Probar playback (−${PLAYBACK_OFFSET_SEC} s)</button>
     <div class="playback-preview hidden">
@@ -836,8 +870,8 @@ function renderDevicePanel(device) {
         <p class="probe-placeholder">Prueba la URL RTSP antes de guardar</p>
       </div>
       <button type="button" class="btn-block secondary" data-probe="">Probar conexión</button>
+      <pre class="action-msg hidden" data-probe-msg="" aria-live="polite"></pre>
       <p class="probe-net hint">La prueba RTSP la hace el <strong>servidor Kanvis</strong> (no el navegador). Debe poder abrir <code>host:puerto</code> desde ese equipo.</p>
-      <p class="probe-msg hint"></p>
     </div>
     <p class="section-label">2 · Guardar</p>
     <button type="button" class="btn-block primary" data-save-device="">Guardar cámara</button>
@@ -897,16 +931,21 @@ function renderDevicePanel(device) {
   });
 
   panel.querySelector("[data-probe]")?.addEventListener("click", async () => {
-    const msg = panel.querySelector(".probe-msg");
+    const msg = panel.querySelector("[data-probe-msg]");
     const preview = panel.querySelector(".probe-preview");
+    syncDeviceCredsFromDom(device);
     if (!device.host?.trim()) {
-      return toast("Indica la IP", true);
+      return setActionMsg(msg, "Indica la IP", "err");
     }
-    msg.textContent = "Capturando frame…";
+    setActionMsg(msg, "Capturando frame RTSP…");
     try {
       const url = await probeDevice(device, device.probeChannel);
       preview.innerHTML = `<img src="${url}" alt="Vista previa" />`;
-      msg.textContent = "Cámara detectada";
+      setActionMsg(
+        msg,
+        `Conexión RTSP correcta (canal ${device.probeChannel || "—"}). Puedes guardar la cámara.`,
+        "ok"
+      );
       const oldKey = device.key;
       device.key = hostKey(device.host);
       if (oldKey !== device.key) {
@@ -916,8 +955,7 @@ function renderDevicePanel(device) {
       }
     } catch (err) {
       preview.innerHTML = '<p class="probe-placeholder">Sin imagen</p>';
-      msg.textContent = err.message;
-      toast(err.message, true);
+      setActionMsg(msg, err.message, "err");
     }
   });
 
@@ -1122,13 +1160,14 @@ async function waitForIngest(cameraId, maxMs = 20000) {
 }
 
 async function toggleBroadcast(device, cam, card) {
+  const bcMsg = card.querySelector("[data-bc-msg]");
   const cameraId =
     cam?.camera_id ||
     resolveCameraId(device.host, cam?.source?.channel || card.dataset.channelKey);
   if (!camerasCache.some((c) => c.camera_id === cameraId)) {
-    throw new Error(
-      `Cámara no encontrada (${cameraId}). Guarda el canal de nuevo con «+ Añadir canal».`
-    );
+    const m = `Cámara no encontrada (${cameraId}). Guarda el canal con «+ Añadir canal».`;
+    setActionMsg(bcMsg, m, "err");
+    throw new Error(m);
   }
   if (cam && !cam.camera_id) cam.camera_id = cameraId;
   const mode =
@@ -1139,15 +1178,24 @@ async function toggleBroadcast(device, cam, card) {
   const isOn = card.dataset.broadcastOn === "1";
 
   setChannelBusy(card, true, isOn ? "Desactivando…" : "Activando broadcast…");
+  setActionMsg(bcMsg, isOn ? "Desactivando broadcast…" : "Activando broadcast…");
   try {
     if (!isOn) {
       const ov = readBroadcastOverride(device, cam, card);
+      const pwd = resolveRtspPassword(device, cam, card) || ov.password || "";
+      if (!pwd) {
+        const m =
+          "Falta la contraseña RTSP. Rellénala arriba, pulsa «Guardar cámara», o márcala en «Otros datos RTSP».";
+        setActionMsg(bcMsg, m, "err");
+        throw new Error(m);
+      }
+      ov.password = pwd;
       const payload = buildCameraPayload(
         {
           host: ov.host,
           port: ov.port,
           username: ov.username,
-          password: ov.password || "",
+          password: pwd,
           brand: ov.brand,
           broadcastMode: mode,
         },
@@ -1185,16 +1233,21 @@ async function toggleBroadcast(device, cam, card) {
 
       if (mode === "webrtc") {
         setChannelBusy(card, true, "Conectando WebRTC…");
+        setActionMsg(bcMsg, "Conectando WebRTC…");
         const video = card.querySelector("video");
         await KanvisWebRtcViewer.connect(cameraId, api, {
           video,
           onState: (s) => {
-            if (s === "connected") toast("WebRTC conectado");
+            if (s === "connected") setActionMsg(bcMsg, "WebRTC conectado. Rellenando búfer…", "ok");
           },
         });
         video?.classList.remove("hidden");
       }
-      toast("Broadcast activado — rellenando búfer…");
+      setActionMsg(
+        bcMsg,
+        `Broadcast activado (${mode}). Ingesta OK — búfer rellenándose.`,
+        "ok"
+      );
       let polls = 0;
       const pollId = setInterval(() => {
         refreshChannelStatus(cameraId, card, device, cam);
@@ -1232,13 +1285,13 @@ async function toggleBroadcast(device, cam, card) {
       if (cacheIdx >= 0) camerasCache[cacheIdx] = savedCam;
       device.broadcastMode = mode;
       upsertDeviceDraft({ ...device, broadcastMode: mode });
-      toast("Broadcast desactivado");
+      setActionMsg(bcMsg, "Broadcast desactivado.", "ok");
     }
     syncBroadcastModeRadios(card, cameraId, mode);
     await refreshChannelStatus(cameraId, card, device, cam);
     await loadAccessInfo(cameraId, card, device, cam);
   } catch (err) {
-    toast(err.message, true);
+    setActionMsg(bcMsg, err.message, "err");
   } finally {
     setChannelBusy(card, false);
   }
