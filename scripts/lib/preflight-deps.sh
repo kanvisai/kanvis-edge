@@ -17,8 +17,28 @@ PREFLIGHT_DEPS=(
   "dbus-x11 (SSH -X)|dbus-x11||acceso"
   "TigerVNC|tigervnc-standalone-server|vncserver|acceso"
   "hostapd (WiFi AP)|hostapd|hostapd|red_ap"
-  "dnsmasq (DHCP AP)|dnsmasq|dnsmasq|red_ap"
+  "dnsmasq (DHCP AP)|dnsmasq||red_ap"
 )
+
+# Tras "apt install dnsmasq", Debian suele arrancar dnsmasq.service → conflicto en :53.
+# Kanvis usa su propio dnsmasq (solo DHCP, port=0) al ejecutar kanvis-network.sh.
+preflight_stabilize_ap_services() {
+  ui_section "Evitando conflicto puerto 53 (hostapd/dnsmasq del sistema)"
+  for svc in dnsmasq hostapd; do
+    systemctl stop "${svc}.service" 2>/dev/null || true
+    systemctl disable "${svc}.service" 2>/dev/null || true
+    systemctl mask "${svc}.service" 2>/dev/null || true
+  done
+  pkill -x dnsmasq 2>/dev/null || true
+  pkill -x hostapd 2>/dev/null || true
+  sleep 0.5
+  if ss -ulnp 2>/dev/null | grep -q ':53 '; then
+    ui_warn "Algo sigue escuchando en UDP/53 (p. ej. systemd-resolved). El AP Kanvis no usa DNS en :53."
+    ui_detail "Comprueba: ss -ulnp | grep ':53'"
+  else
+    ui_ok "dnsmasq/hostapd del sistema detenidos; puerto 53 libre para el AP Kanvis"
+  fi
+}
 
 preflight_pkg_installed() {
   local pkg="$1"
@@ -65,7 +85,11 @@ preflight_install_missing() {
   ui_section "Instalando paquetes faltantes"
   ui_detail "Paquetes: ${PREFLIGHT_MISSING[*]}"
   apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${PREFLIGHT_MISSING[@]}"
+  # Evitar que el postinst de dnsmasq/hostapd deje servicios activos en :53
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    "${PREFLIGHT_MISSING[@]}"
+  preflight_stabilize_ap_services
   ui_ok "Instalación APT completada"
 }
 

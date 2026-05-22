@@ -140,4 +140,5 @@ sudo /opt/kanvis-edge/scripts/kanvis-network.sh status
 | hostapd falla en Pi | `sudo systemctl start kanvis-network` y mira `journalctl -u kanvis-network`; el script ya aplica perfil RPi OS |
 | No abre la web | `curl http://127.0.0.1:8000/api/v1/health` en el device |
 | Sin DHCP en AP | `apt install dnsmasq`; revisa logs `journalctl -u kanvis-network` |
-| dnsmasq: `port 53` en uso | El AP usa `port=0` (solo DHCP). Para: `sudo systemctl restart kanvis-network`. Si falla: `sudo systemctl stop dnsmasq` y `mask dnsmasq` |
+| dnsmasq: `port 53` en uso al **apt install** (preflight) | Normal: el paquete arranca `dnsmasq.service`. Ejecuta `sudo ./scripts/preflight.sh --fix-services` o `sudo systemctl stop dnsmasq && sudo systemctl mask dnsmasq`. El AP Kanvis no usa ese servicio. |
+| `kanvis-network` desconocido | Ese servicio se crea en `install.sh`, no en preflight. Orden: preflight → install → deploy. |

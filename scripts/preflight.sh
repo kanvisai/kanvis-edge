@@ -15,13 +15,16 @@ source "${SCRIPT_DIR}/lib/preflight-deps.sh"
 source "${SCRIPT_DIR}/lib/preflight-capacity.sh"
 
 DO_INSTALL=0
+DO_FIX_SERVICES=0
 for arg in "$@"; do
   case "$arg" in
     --install|-i) DO_INSTALL=1 ;;
+    --fix-services|--fix-dns) DO_FIX_SERVICES=1 ;;
     --help|-h)
-      echo "Uso: $0 [--install]"
+      echo "Uso: $0 [--install] [--fix-services]"
       echo "  Sin --install: solo comprueba (verde/rojo) y estima capacidad."
-      echo "  Con --install: pide sudo e instala paquetes faltantes."
+      echo "  Con --install: pide sudo, instala paquetes y detiene dnsmasq/hostapd del sistema."
+      echo "  --fix-services: solo corrige puerto 53 si apt install dnsmasq ya falló antes."
       exit 0
       ;;
   esac
@@ -34,6 +37,17 @@ ui_detail "Distro: ${DISTRO}"
 ui_detail "Arquitectura: $(uname -m)"
 
 had_fail=0
+
+if [[ "$DO_FIX_SERVICES" -eq 1 ]]; then
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    ui_need_root "$0" --fix-services
+    exit 0
+  fi
+  preflight_stabilize_ap_services
+  ui_ok "Corrección aplicada. Sigue con: sudo ./scripts/install.sh"
+  exit 0
+fi
+
 preflight_show_all_checks || had_fail=1
 
 preflight_scan_missing
