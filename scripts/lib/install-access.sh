@@ -3,7 +3,12 @@
 # shellcheck disable=SC2034
 set -euo pipefail
 
-install_access_log() { echo "[install-access] $*"; }
+install_access_log() {
+  if declare -F ui_detail &>/dev/null; then ui_detail "$*"; else echo "[install-access] $*"; fi
+}
+install_access_ok() {
+  if declare -F ui_ok &>/dev/null; then ui_ok "$*"; else echo "[install-access] OK: $*"; fi
+}
 
 # Lee VAR=valor de uno o más ficheros estilo .env (sin eval).
 read_env_var() {
@@ -61,7 +66,7 @@ setup_kanvis_login_user() {
   fi
 
   echo "${user}:${password}" | chpasswd
-  install_access_log "Contraseña OS aplicada para ${user} (sudo habilitado)"
+  install_access_ok "Contraseña OS aplicada (${user} con sudo)"
 }
 
 setup_ssh_x11() {
@@ -71,7 +76,7 @@ setup_ssh_x11() {
     return 0
   fi
 
-  install_access_log "Instalando OpenSSH y habilitando reenvío X11 (+X)"
+  install_access_log "Instalando paquetes OpenSSH y xauth…"
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     openssh-server \
     xauth \
@@ -94,7 +99,7 @@ EOF
 
   systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || true
   systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
-  install_access_log "SSH activo (ssh -X kanvis@<IP> para apps gráficas remotas)"
+  install_access_ok "Acceso SSH habilitado (reenvío X11: ssh -X ${KANVIS_USER:-kanvis}@<IP>)"
 }
 
 setup_vnc_tigervnc() {
@@ -147,8 +152,8 @@ EOF
 
   systemctl daemon-reload
   systemctl enable kanvis-vnc.service
-  systemctl restart kanvis-vnc.service 2>/dev/null || install_access_log "VNC: arranca con systemctl start kanvis-vnc tras el primer boot"
-  install_access_log "TigerVNC en ${display} (visor → <IP>${display})"
+  systemctl restart kanvis-vnc.service 2>/dev/null || install_access_log "VNC: arranca con: systemctl start kanvis-vnc"
+  install_access_ok "VNC habilitado (TigerVNC ${display}, puerto 590${display#:})"
 }
 
 setup_vnc() {
@@ -165,7 +170,7 @@ setup_vnc() {
       if command -v raspi-config &>/dev/null; then
         raspi-config nonint do_vnc 0 2>/dev/null || true
       fi
-      install_access_log "Conéctate con el usuario ${user} y la contraseña KANVIS_OS_PASSWORD"
+      install_access_ok "VNC del sistema habilitado (usuario ${user}, contraseña KANVIS_OS_PASSWORD)"
       ;;
     *)
       setup_vnc_tigervnc "$user" "$install_root" "$password" "$display"

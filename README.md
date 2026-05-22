@@ -160,8 +160,9 @@ La misma sesión JWT sirve para las llamadas API desde el panel. La nube sigue u
 **En el cacharro de tienda (con WiFi `kanvis-XXXX`):**
 
 ```bash
+./scripts/preflight.sh && sudo ./scripts/preflight.sh --install
 sudo ./scripts/install.sh
-sudo systemctl start kanvis-network kanvis-edge
+sudo ./scripts/deploy.sh    # pausa para editar .env, luego arranca
 ```
 
 **Solo pruebas con Docker** (sin AP): `docker compose up -d` — ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).

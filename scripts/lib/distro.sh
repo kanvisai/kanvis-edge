@@ -10,9 +10,11 @@ detect_kanvis_distro() {
   if [[ -f /etc/os-release ]]; then
     # shellcheck source=/dev/null
     local ID ID_LIKE NAME
-    ID="$(. /etc/os-release && echo "${ID}")"
-    ID_LIKE="$(. /etc/os-release && echo "${ID_LIKE}")"
-    NAME="$(. /etc/os-release && echo "${NAME}")"
+    # shellcheck source=/dev/null
+    . /etc/os-release
+    ID="${ID:-}"
+    ID_LIKE="${ID_LIKE:-}"
+    NAME="${NAME:-}"
     case "${ID} ${ID_LIKE} ${NAME}" in
       *raspbian*|*raspberry*|*Raspberry*)
         echo "$KANVIS_DISTRO_RASPIOS"

@@ -11,18 +11,31 @@ Guía para Raspberry Pi, Jetson Orin Nano, Intel N100 u otro Linux en la tienda.
 - Ethernet (`eth0`) hacia el router de la tienda (modo `ap_and_lan`)
 - Paquetes: `hostapd`, `dnsmasq`, `ffmpeg`, Python 3.11+
 
-## Instalación rápida
-
-Antes de instalar, puedes fijar contraseña y tokens en `.env` y `deploy/network/kanvis-edge.env.example` (se copian a `/etc/kanvis-edge/env`).
+## Instalación en 3 pasos (recomendado)
 
 ```bash
 cd kanvis-edge
-# Opcional: edita KANVIS_OS_PASSWORD y tokens en .env antes de instalar
+
+# 1) Preflight: dependencias [OK]/[FALTA] + estimación pesimista de cámaras
+./scripts/preflight.sh
+sudo ./scripts/preflight.sh --install
+
+# 2) Instalador visual (usuario kanvis, SSH, VNC, Python, systemd)
 sudo ./scripts/install.sh
-sudo nano /opt/kanvis-edge/.env   # DEVICE_NAME, DEVICE_ID, contraseñas, tokens
+
+# 3) Pausa para editar config, auditoría y arranque
+sudo ./scripts/deploy.sh
+```
+
+`deploy.sh` lista qué cambiar en `/opt/kanvis-edge/.env` y `/etc/kanvis-edge/env` antes de levantar servicios.
+
+## Instalación rápida (manual)
+
+```bash
+sudo ./scripts/install.sh
+sudo nano /opt/kanvis-edge/.env
 sudo nano /etc/kanvis-edge/env
-sudo systemctl start kanvis-network
-sudo systemctl start kanvis-edge
+sudo ./scripts/deploy.sh
 ```
 
 ### Usuario `kanvis`, SSH y VNC

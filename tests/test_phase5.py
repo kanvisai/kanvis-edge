@@ -19,6 +19,9 @@ def test_deploy_files_exist() -> None:
     assert (root / "deploy/systemd/kanvis-edge.service").is_file()
     assert (root / "scripts/kanvis-network.sh").is_file()
     assert (root / "scripts/install.sh").is_file()
+    assert (root / "scripts/preflight.sh").is_file()
+    assert (root / "scripts/deploy.sh").is_file()
+    assert (root / "scripts/lib/ui.sh").is_file()
     assert (root / "scripts/lib/distro.sh").is_file()
     assert (root / "scripts/lib/install-access.sh").is_file()
 
