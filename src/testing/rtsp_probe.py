@@ -179,13 +179,18 @@ async def probe_rtsp_stream(
     ffmpeg_path: str = "ffmpeg",
     transport: str = "tcp",
     timeout_sec: float = 10.0,
+    *,
+    allow_pyav_fallback: bool = False,
 ) -> RtspStreamProbe:
+    """Solo ffprobe por defecto (no abre RTSP con PyAV; evita bloquear la cámara)."""
     ffprobe = ffprobe_path_from_ffmpeg(ffmpeg_path)
     try:
         return await asyncio.to_thread(
-            _probe_sync, url, ffprobe, transport, timeout_sec
+            _probe_sync, url, ffprobe, transport, min(timeout_sec, 12.0)
         )
     except SnapshotError:
+        if not allow_pyav_fallback:
+            raise
         try:
             return await asyncio.to_thread(
                 _probe_pyav_sync, url, transport, min(timeout_sec, 8.0)

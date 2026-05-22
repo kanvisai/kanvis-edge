@@ -401,20 +401,23 @@ function showProbeCodecBadge(panel, probe) {
   }
 }
 
-async function fetchProbeCodecMeta(body) {
-  const paths = ["/api/v1/tools/rtsp-probe-meta", "/api/v1/rtsp/probe-meta"];
-  let lastErr = "";
-  for (const path of paths) {
-    try {
-      return await api(path, { method: "POST", json: body });
-    } catch (err) {
-      lastErr = err.message || String(err);
-      const msg = String(lastErr);
-      if (msg.includes("404") || msg.includes("405")) continue;
-      return { ok: false, codec_detected: false, error: lastErr };
-    }
-  }
-  return { ok: false, codec_detected: false, error: lastErr || "meta no disponible (deploy?)" };
+function base64ToBlob(b64, mime) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime || "image/jpeg" });
+}
+
+function probeResultFromJson(data) {
+  const blob = base64ToBlob(data.image_base64, data.content_type || "image/jpeg");
+  return {
+    objectUrl: URL.createObjectURL(blob),
+    codec: data.codec_name || "",
+    recommendation: data.recommendation || "",
+    hint: data.recommendation_label || "",
+    resolution: data.resolution || "",
+    metaError: data.codec_detected ? "" : data.error || "Códec no detectado",
+  };
 }
 
 async function probeDevice(device, channel) {
@@ -433,7 +436,21 @@ async function probeDevice(device, channel) {
     throw new Error("Elige la marca (Annke, etc.) para armar la URL RTSP");
   }
 
-  const meta = await fetchProbeCodecMeta(body);
+  const jsonPaths = ["/api/v1/tools/rtsp-probe-json", "/api/v1/rtsp/probe-json"];
+  let lastErr;
+  for (const path of jsonPaths) {
+    try {
+      const data = await api(path, { method: "POST", json: body });
+      if (data?.ok && data.image_base64) return probeResultFromJson(data);
+      throw new Error(data?.error || "Respuesta probe incompleta");
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err.message || "");
+      if (msg.includes("404") || msg.includes("405")) continue;
+      throw err;
+    }
+  }
+
   const headers = { "Content-Type": "application/json" };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -442,7 +459,6 @@ async function probeDevice(device, channel) {
     "/api/v1/rtsp/probe",
     "/api/v1/cameras/probe",
   ];
-  let lastErr;
   for (const path of imagePaths) {
     try {
       const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
@@ -459,29 +475,13 @@ async function probeDevice(device, channel) {
         throw new Error(detail ? `${detail} (HTTP ${res.status})` : `HTTP ${res.status}`);
       }
       const blob = await res.blob();
-      const codec =
-        meta.codec_name ||
-        res.headers.get("X-Kanvis-Video-Codec") ||
-        "";
-      const rec =
-        meta.recommendation ||
-        res.headers.get("X-Kanvis-Broadcast-Recommendation") ||
-        "";
-      const hint =
-        meta.recommendation_label ||
-        res.headers.get("X-Kanvis-Codec-Hint") ||
-        "";
-      const reso =
-        meta.resolution ||
-        res.headers.get("X-Kanvis-Video-Resolution") ||
-        "";
       return {
         objectUrl: URL.createObjectURL(blob),
-        codec,
-        recommendation: rec,
-        hint,
-        resolution: reso,
-        metaError: meta.ok ? "" : meta.error || "",
+        codec: "",
+        recommendation: "",
+        hint: "",
+        resolution: "",
+        metaError: "Sin detección de códec (actualiza deploy)",
       };
     } catch (err) {
       lastErr = err;
@@ -490,7 +490,7 @@ async function probeDevice(device, channel) {
     }
   }
   throw new Error(
-    `${lastErr?.message || "Probe no disponible"}. En el guardia ejecuta: sudo ./scripts/deploy.sh --yes y recarga la web (Ctrl+F5). Comprueba: curl http://127.0.0.1:8000/api/v1/health`
+    `${lastErr?.message || "Probe no disponible"}. Ejecuta: sudo ./scripts/deploy.sh --yes y Ctrl+F5. Health debe tener rtsp_probe_json: true`
   );
 }
 
