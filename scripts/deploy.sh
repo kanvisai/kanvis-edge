@@ -78,25 +78,41 @@ fi
 ui_section "Arrancando gateway Kanvis Edge"
 systemctl start kanvis-edge.service
 
-ui_section "Comprobando API"
-HEALTH_URL="http://127.0.0.1:8000/api/v1/health"
+ui_section "Comprobando API local (gateway en este cacharro)"
+API_PORT="$(read_env_var EDGE_API_PORT "$ENV_SYSTEM" "$APP_ENV" 2>/dev/null || echo 8000)"
+API_HOST="$(read_env_var EDGE_API_HOST "$ENV_SYSTEM" "$APP_ENV" 2>/dev/null || echo 0.0.0.0)"
+HEALTH_URL="http://127.0.0.1:${API_PORT}/api/v1/health"
 AP_IP="$(read_env_var AP_IP "$ENV_SYSTEM" "$APP_ENV" 2>/dev/null || echo 192.168.192.192)"
 DEVICE_ID="$(read_env_var DEVICE_ID "$APP_ENV" 2>/dev/null || echo edge)"
 WEB_USER="$(read_env_var WEBUI_USERNAME "$APP_ENV" 2>/dev/null || echo admin)"
+if [[ "${API_HOST}" == "127.0.0.1" || "${API_HOST}" == "localhost" ]]; then
+  ui_warn "EDGE_API_HOST=${API_HOST} — el móvil en el AP no podrá abrir el panel; usa EDGE_API_HOST=0.0.0.0"
+fi
 ok=0
-for i in 1 2 3 4 5 6 7 8 9 10; do
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
   if curl -fsS "$HEALTH_URL" &>/dev/null; then
     ok=1
     break
   fi
-  ui_detail "Esperando API… (${i}/10)"
+  if ! systemctl is-active --quiet kanvis-edge.service 2>/dev/null; then
+    ui_detail "kanvis-edge no está active (intento ${i}/15)…"
+  else
+    ui_detail "Esperando API… (${i}/15)"
+  fi
   sleep 2
 done
 
 if [[ "$ok" -eq 1 ]]; then
-  ui_ok "API respondiendo en ${HEALTH_URL}"
+  ui_ok "API local respondiendo en ${HEALTH_URL}"
 else
-  ui_fail "La API no responde. Revisa: journalctl -u kanvis-edge -n 50"
+  ui_fail "La API local no responde (no es el backend Kanvis en la nube)"
+  ui_detail "Revisa el servicio en ESTE equipo:"
+  echo ""
+  systemctl status kanvis-edge.service --no-pager -l 2>/dev/null | tail -20 || true
+  echo ""
+  journalctl -u kanvis-edge -n 25 --no-pager 2>/dev/null || true
+  ui_detail "Prueba: curl -v ${HEALTH_URL}"
+  ui_detail "Si ProtectSystem bloqueaba el arranque: sudo cp deploy/systemd/kanvis-edge.service /etc/systemd/system/ && sudo systemctl daemon-reload"
   exit 1
 fi
 
@@ -107,8 +123,9 @@ fi
 echo ""
 ui_banner "Despliegue completado"
 echo -e "  ${UI_GREEN}Panel web:${UI_NC}"
-echo -e "    LAN/AP:  ${UI_BOLD}http://${AP_IP}:8000/${UI_NC}"
-echo -e "    Local:   ${UI_BOLD}http://127.0.0.1:8000/${UI_NC}"
+echo -e "    LAN/AP:  ${UI_BOLD}http://${AP_IP}:${API_PORT}/${UI_NC}  (móvil en WiFi kanvis)"
+echo -e "    Local:   ${UI_BOLD}http://127.0.0.1:${API_PORT}/${UI_NC}"
+echo -e "    ${UI_DIM}Usa http (no https). EDGE_API_HOST debe ser 0.0.0.0 para acceso desde el AP.${UI_NC}"
 echo ""
 echo -e "  ${UI_GREEN}Login panel:${UI_NC} usuario ${UI_BOLD}${WEB_USER}${UI_NC} + WEBUI_PASSWORD (.env)"
 echo -e "  ${UI_GREEN}WiFi instalación:${UI_NC} kanvis-${DEVICE_ID} (si NETWORK_MODE incluye AP)"

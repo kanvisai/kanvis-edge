@@ -366,6 +366,46 @@ sudo /opt/kanvis-edge/scripts/kanvis-network.sh status
 
 ---
 
+## Panel no carga en `http://192.168.192.192:8000`
+
+1. **URL:** `http://` (no `https://`), puerto **`:8000`**.
+2. **Servicio local** (en el cacharro, por SSH o consola):
+
+```bash
+sudo systemctl status kanvis-edge
+curl -s http://127.0.0.1:8000/api/v1/health
+ss -tlnp | grep 8000
+```
+
+Debe salir `{"status":"ok"}` y algo escuchando en `0.0.0.0:8000` (no solo `127.0.0.1`).
+
+3. **`EDGE_API_HOST`** en `/etc/kanvis-edge/env`:
+
+```env
+EDGE_API_HOST=0.0.0.0
+EDGE_API_PORT=8000
+```
+
+Si es `127.0.0.1`, el panel solo funciona en el propio cacharro, no desde el móvil en el AP.
+
+4. **systemd** (fallos por hardening): actualiza la unidad y recarga:
+
+```bash
+sudo cp /opt/kanvis-edge/deploy/systemd/kanvis-edge.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart kanvis-edge
+```
+
+5. **Logs de arranque:**
+
+```bash
+journalctl -u kanvis-edge -n 50 --no-pager
+```
+
+6. El mensaje de deploy **«API no responde»** se refiere al gateway en **este** equipo, no a `CLOUD_REPORT_URL`. El reporte a nube puede fallar aparte si el backend remoto no está accesible.
+
+---
+
 ## Solución de problemas
 
 | Problema | Qué hacer |
@@ -375,7 +415,8 @@ sudo /opt/kanvis-edge/scripts/kanvis-network.sh status
 | `install`: BAD PASSWORD contains user name | Contraseña sin substring `kanvis`; o `sudo usermod -p "$(openssl passwd -6 '...')" kanvis` |
 | Perdí SSH tras levantar AP | Consola: `kanvis-network.sh stop`; `nmcli`; o AP → `ssh kanvis@192.168.192.192` |
 | `WLAN_INTERFACE` incorrecta | `ip link` → poner nombre real en `/etc/kanvis-edge/env` |
-| Panel no abre | `curl http://127.0.0.1:8000/api/v1/health` en el cacharro |
+| Panel no abre / móvil en AP sin respuesta | Ver sección **Panel no carga** abajo |
+| Deploy: «La API no responde» | Es la API **local** (`kanvis-edge`), no el backend nube. `journalctl -u kanvis-edge -n 50` |
 | Sin WiFi `kanvis-XXXX` | `iw list` (modo AP); `journalctl -u kanvis-network` |
 | `.env` y `/etc/.../env` distintos | Un solo fichero: edita `/etc/kanvis-edge/env`; verifica el enlace en `/opt` |
 | Línea suelta en env → `command not found` | Cada línea debe ser `CLAVE=valor` (tokens sin `CLOUD_ACCESS_TOKEN=` rompen scripts) |

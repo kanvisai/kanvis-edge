@@ -1,9 +1,9 @@
 [Unit]
 Description=Kanvis Edge Video Gateway
 Documentation=https://github.com/kanvis/kanvis-edge
-After=network-online.target kanvis-network.service
-Wants=network-online.target
-# Si usas solo LAN sin AP, comenta la línea After=kanvis-network.service
+After=network.target kanvis-network.service
+# No usar network-online: con solo AP sin internet el target puede no completarse.
+# Si usas solo LAN sin AP, comenta After=kanvis-network.service
 
 [Service]
 Type=simple
@@ -16,14 +16,15 @@ EnvironmentFile=-/etc/kanvis-edge/env
 ExecStart=/opt/kanvis-edge/.venv/bin/python -m src.main
 Restart=on-failure
 RestartSec=5
+TimeoutStartSec=120
 TimeoutStopSec=30
 LimitNOFILE=65536
 
-# Hardening ligero (ajusta si algo falla en tu hardware)
+# Hardening: /opt/kanvis-edge completo escribible (venv, config, logs de app)
 NoNewPrivileges=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/opt/kanvis-edge/config /opt/kanvis-edge/data
+ReadWritePaths=/opt/kanvis-edge
 PrivateTmp=true
 
 [Install]
