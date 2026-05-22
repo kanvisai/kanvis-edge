@@ -105,6 +105,9 @@ class StreamConsumer:
                 )
                 stream = container.streams.video[0]
                 stream.thread_type = "AUTO"
+                codec_name = getattr(stream.codec, "name", None) or ""
+                if codec_name:
+                    self.metrics.set_video_codec(codec_name)
 
                 delay = self._settings.reconnect_base_delay
                 self.metrics.on_connected()

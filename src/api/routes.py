@@ -494,6 +494,7 @@ def _cached_public_ip(request: Request) -> str:
 
 
 def _resolve_panel_urls(request: Request, settings: AppSettings) -> dict[str, str]:
+    from src.services.lan_ip import detect_edge_lan_ip
     """
     URLs para broadcast / WebRTC / relay vistos desde fuera.
     La IP de la cámara (RTSP origen) sigue siendo la privada en source; aquí va la IP pública del edge.
@@ -513,6 +514,10 @@ def _resolve_panel_urls(request: Request, settings: AppSettings) -> dict[str, st
     configured = (settings.edge_panel_public_url or "").strip().rstrip("/")
     detected = _cached_public_ip(request)
     lan = settings.ap_ip or "192.168.192.192"
+    edge_lan = detect_edge_lan_ip(lan)
+    lan_access_base = (
+        f"{scheme}://{edge_lan}:{port}" if edge_lan else f"{scheme}://{lan}:{port}"
+    )
 
     public_base = ""
     note = ""
@@ -522,17 +527,18 @@ def _resolve_panel_urls(request: Request, settings: AppSettings) -> dict[str, st
         note = "URL fija de EDGE_PANEL_PUBLIC_URL (opcional; anula la detección automática)."
     elif detected:
         public_base = f"{scheme}://{detected}:{port}"
+        lan_hint = (
+            f" En esta red abre el panel por LAN: {lan_access_base}/ "
+            f"(la IP pública {detected} suele no funcionar desde dentro de casa)."
+        )
         if access_base and _is_loopback_host(host_raw):
             note = (
-                f"IP pública detectada automáticamente: {detected}. "
-                f"Abres el panel por {host_raw} (túnel/local); desde fuera usa la URL de abajo "
-                f"(reenvío de puertos {port} y relay RTSP en el router)."
+                f"IP pública detectada: {detected}. "
+                f"Abres el panel por {host_raw} (túnel/local).{lan_hint} "
+                f"Desde internet: reenvío puerto {port} en el router."
             )
         else:
-            note = (
-                f"IP pública detectada automáticamente: {detected} "
-                f"(se actualiza cada pocos minutos)."
-            )
+            note = f"IP pública: {detected} (se actualiza sola).{lan_hint}"
     elif host_raw and not _is_loopback_host(host_raw):
         public_base = access_base
         note = "Sin IP pública en caché aún; usando la misma URL del navegador."
@@ -543,13 +549,15 @@ def _resolve_panel_urls(request: Request, settings: AppSettings) -> dict[str, st
             "Comprueba salida a internet del guardia."
         )
 
-    api_base = public_base or access_base or f"{scheme}://127.0.0.1:{port}"
+    api_base = public_base or access_base or lan_access_base
     return {
         "api_base": api_base,
         "access_url": access_base,
         "public_url": public_base,
+        "lan_access_url": lan_access_base,
+        "edge_lan_ip": edge_lan,
         "public_ip": detected,
-        "public_host": detected or lan,
+        "public_host": detected or edge_lan or lan,
         "url_note": note,
         "lan_ip": lan,
     }
@@ -662,6 +670,8 @@ def _build_camera_access_info(
         "webrtc": webrtc_block,
         "panel_urls": {
             "public": panel_urls.get("public_url") or api_base,
+            "lan": panel_urls.get("lan_access_url") or "",
+            "edge_lan_ip": panel_urls.get("edge_lan_ip") or "",
             "public_ip": panel_urls.get("public_ip") or "",
             "access": panel_urls.get("access_url") or "",
             "note": panel_urls.get("url_note") or "",
@@ -961,6 +971,7 @@ async def camera_status(
         "buffer_packets": buffer.size(),
         "buffer_span_seconds": span,
         "buffer_max_duration_seconds": buffer.max_duration_seconds,
+        "buffer_packets_max": settings.buffer_max_packets_safety,
         "consumer_alive": consumer.is_running,
         "output_protocol": camera.output.protocol.value,
         "relay": relay_info,

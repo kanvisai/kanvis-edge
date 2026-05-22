@@ -231,10 +231,21 @@ async def snapshot_buffer(
             status_code=400,
             detail=f"Búfer solo cubre {span:.1f}s; necesitas ~{offset_sec:.0f}s con broadcast activo",
         )
+    ingest = manager.get_consumer(camera_id)
+    video_codec = None
+    if ingest:
+        video_codec = ingest.metrics.snapshot().get("video_codec")
     try:
-        jpeg = capture_jpeg_from_buffer(buffer, offset_sec)
+        jpeg = capture_jpeg_from_buffer(
+            buffer, offset_sec, video_codec=video_codec
+        )
     except SnapshotError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error decodificando búfer: {exc}",
+        ) from exc
     return Response(
         content=jpeg,
         media_type="image/jpeg",

@@ -16,7 +16,12 @@ class IngestMetrics:
     last_packet_at: float | None = None
     connected_since: float | None = None
     last_error: str | None = None
+    video_codec: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def set_video_codec(self, name: str | None) -> None:
+        with self._lock:
+            self.video_codec = (name or "").strip() or None
 
     def on_connected(self) -> None:
         now = time.monotonic()
@@ -62,4 +67,5 @@ class IngestMetrics:
                 "last_packet_idle_sec": round(idle_sec, 2) if idle_sec is not None else None,
                 "connected_uptime_sec": round(uptime, 2),
                 "last_error": self.last_error,
+                "video_codec": self.video_codec,
             }

@@ -14,6 +14,8 @@ let camerasCache = [];
 /** Borradores por IP aún no guardados en API */
 let draftDevices = [];
 let activeDeviceKey = null;
+/** interval por camera_id mientras broadcast activo */
+const channelStatusPollers = new Map();
 
 function getToken() {
   return sessionStorage.getItem(TOKEN_KEY) || "";
@@ -528,18 +530,26 @@ function renderConnectionHints(el, info, mode) {
     html += `<p class="hint">Vista previa con los datos del formulario (sin guardar aún).</p>`;
   }
   const pu = info.panel_urls || {};
+  if (pu.lan) {
+    html += `<p class="hint"><strong>Panel en esta red (usa esta URL):</strong> <a class="conn-link" href="${escapeHtml(
+      pu.lan
+    )}/" target="_blank" rel="noopener">${escapeHtml(pu.lan)}/</a> <button type="button" class="btn-sm" data-copy-url="${escapeHtml(
+      `${pu.lan}/`
+    )}">Copiar</button></p>`;
+  }
   if (pu.public_ip) {
-    html += `<p class="hint"><strong>IP pública del edge:</strong> ${escapeHtml(
+    html += `<p class="hint"><strong>IP pública (desde internet):</strong> ${escapeHtml(
       pu.public_ip
     )} <button type="button" class="btn-sm" data-refresh-public-ip="">Actualizar IP</button></p>`;
+  }
+  if (pu.public && pu.lan && pu.public.replace(/\/$/, "") !== pu.lan.replace(/\/$/, "")) {
+    html += `<p class="hint">Desde fuera / 4G: <code>${escapeHtml(pu.public)}/</code> — reenvío puerto 8000 en el router. Desde la misma WiFi la IP pública a menudo <strong>no abre</strong>; usa la URL LAN de arriba.</p>`;
   }
   if (pu.note) {
     html += `<p class="hint">${escapeHtml(pu.note)}</p>`;
   }
   if (pu.access && pu.public && pu.access !== pu.public) {
-    html += `<p class="hint">Navegador: <code>${escapeHtml(pu.access)}</code> · Desde fuera: <code>${escapeHtml(
-      pu.public
-    )}</code></p>`;
+    html += `<p class="hint">Navegador actual: <code>${escapeHtml(pu.access)}</code></p>`;
   }
   html += `<p class="section-label">Datos de conexión</p>`;
   html += `<div class="conn-block"><strong>Origen cámara (RTSP)</strong><pre class="conn-pre">${escapeHtml(
@@ -683,6 +693,7 @@ function setChannelBusy(card, busy, message = "Conectando…") {
 async function loadAccessInfo(cameraId, card, device, cam) {
   const el = card?.querySelector(".conn-hints");
   if (!el) return;
+  const scrollY = window.scrollY;
   const mode =
     card.querySelector(`input[name="bc-mode-${cameraId}"]:checked`)?.value || "rtsp";
   const useOverride = card.querySelector("[data-bc-override]")?.checked;
@@ -706,8 +717,10 @@ async function loadAccessInfo(cameraId, card, device, cam) {
       info = await api(`/api/v1/cameras/${cameraId}/access-info`);
     }
     renderConnectionHints(el, info, mode);
+    requestAnimationFrame(() => window.scrollTo(0, scrollY));
   } catch (err) {
     el.innerHTML = `<p class="hint err-text">${escapeHtml(err.message)}</p>`;
+    requestAnimationFrame(() => window.scrollTo(0, scrollY));
   }
 }
 
@@ -1074,7 +1087,28 @@ function hasWorkingIngest(st) {
   return !!(st.ingest?.connected && (st.buffer_span_seconds || 0) >= 0.35);
 }
 
-async function refreshChannelStatus(cameraId, card, device, cam) {
+function stopChannelStatusPoll(cameraId) {
+  const id = channelStatusPollers.get(cameraId);
+  if (id != null) {
+    clearInterval(id);
+    channelStatusPollers.delete(cameraId);
+  }
+}
+
+function startChannelStatusPoll(cameraId, card, device, cam) {
+  stopChannelStatusPoll(cameraId);
+  const tick = () => {
+    if (card.dataset.broadcastOn !== "1") {
+      stopChannelStatusPoll(cameraId);
+      return;
+    }
+    refreshChannelStatus(cameraId, card, device, cam, { light: true });
+  };
+  channelStatusPollers.set(cameraId, setInterval(tick, 2500));
+  tick();
+}
+
+async function refreshChannelStatus(cameraId, card, device, cam, opts = {}) {
   const badge = card.querySelector(".ch-status");
   const toggle = card.querySelector("[data-toggle-bc]");
   const playbackBtn = card.querySelector("[data-playback-test]");
@@ -1085,7 +1119,12 @@ async function refreshChannelStatus(cameraId, card, device, cam) {
     const relay = st.relay?.running;
     const rtc = st.webrtc?.session?.connection_state === "connected";
     const span = st.buffer_span_seconds || 0;
+    const maxDur = st.buffer_max_duration_seconds || 60;
+    const pkt = st.buffer_packets || 0;
+    const pktMax = st.buffer_packets_max || 0;
     const bcOn = isBroadcastActive(st);
+    const nearCap =
+      bcOn && ing && (span >= maxDur * 0.92 || (pktMax > 0 && pkt >= pktMax * 0.95));
 
     let html = ing
       ? '<span class="badge ok">Ingesta OK</span>'
@@ -1113,15 +1152,18 @@ async function refreshChannelStatus(cameraId, card, device, cam) {
         bufHint.textContent =
           st.ingest_hint ||
           "Broadcast activo pero sin vídeo: revisa IP, canal (stream1/stream2), marca y credenciales.";
+      } else if (nearCap) {
+        bufHint.textContent = `Búfer lleno: ${span.toFixed(1)}s / ${maxDur}s (${pkt} paquetes) — listo para playback`;
       } else {
-        bufHint.textContent = `Búfer: ${span.toFixed(0)}s / ${st.buffer_max_duration_seconds || 60}s — ingesta en marcha`;
+        bufHint.textContent = `Búfer: ${span.toFixed(1)}s / ${maxDur}s — ingesta en marcha`;
       }
     }
     if (playbackBtn) {
       playbackBtn.disabled = !ing || span < PLAYBACK_OFFSET_SEC * 0.85;
     }
     card.dataset.broadcastOn = bcOn ? "1" : "0";
-    if (device && cam) loadAccessInfo(cameraId, card, device, cam);
+    if (!opts.light && device && cam) loadAccessInfo(cameraId, card, device, cam);
+    if (!bcOn) stopChannelStatusPoll(cameraId);
   } catch {
     badge.innerHTML = '<span class="badge muted">Sin guardar / inactiva</span>';
     if (toggle) {
@@ -1245,15 +1287,13 @@ async function toggleBroadcast(device, cam, card) {
       }
       setActionMsg(
         bcMsg,
-        `Broadcast activado (${mode}). Ingesta OK — búfer rellenándose.`,
+        `Broadcast activado (${mode}). Ingesta OK — búfer rellenándose (hasta 60 s).`,
         "ok"
       );
-      let polls = 0;
-      const pollId = setInterval(() => {
-        refreshChannelStatus(cameraId, card, device, cam);
-        if (++polls >= 20) clearInterval(pollId);
-      }, 2000);
+      card.dataset.broadcastOn = "1";
+      startChannelStatusPoll(cameraId, card, device, cam);
     } else {
+      stopChannelStatusPoll(cameraId);
       if (KanvisWebRtcViewer.getActiveCameraId() === cameraId) {
         await KanvisWebRtcViewer.disconnect(api, cameraId);
         const video = card.querySelector("video");
@@ -1300,8 +1340,9 @@ async function toggleBroadcast(device, cam, card) {
 async function testPlaybackBuffer(cameraId, card) {
   const box = card.querySelector(".playback-preview");
   const img = box?.querySelector("img");
+  const bcMsg = card.querySelector("[data-bc-msg]");
+  setActionMsg(bcMsg, `Capturando frame de hace ${PLAYBACK_OFFSET_SEC} s…`);
   try {
-    toast(`Capturando frame de hace ${PLAYBACK_OFFSET_SEC}s…`);
     const blob = await api(
       `/api/v1/cameras/${cameraId}/snapshot/buffer?offset_sec=${PLAYBACK_OFFSET_SEC}`
     );
@@ -1309,9 +1350,13 @@ async function testPlaybackBuffer(cameraId, card) {
       img.src = URL.createObjectURL(blob);
       box.classList.remove("hidden");
     }
-    toast("Compara la marca de agua con la hora actual");
+    setActionMsg(
+      bcMsg,
+      `Playback OK: frame de hace ~${PLAYBACK_OFFSET_SEC} s. Compara la hora en la imagen con la actual.`,
+      "ok"
+    );
   } catch (err) {
-    toast(err.message, true);
+    setActionMsg(bcMsg, err.message, "err");
   }
 }
 

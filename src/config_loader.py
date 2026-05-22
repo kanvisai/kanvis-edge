@@ -192,8 +192,12 @@ class AppSettings(BaseSettings):
 
     @property
     def buffer_max_packets_safety(self) -> int:
-        """Límite duro de paquetes (protección RAM si el FPS explota)."""
-        return int(self.buffer_duration_seconds * self.stream_fps * 3)
+        """
+        Límite duro de paquetes (protección RAM).
+        H.264 suele enviar varios NAL por frame; con *3 el búfer se quedaba ~40 s.
+        """
+        pkt_per_sec = max(int(self.stream_fps) * 12, 120)
+        return int(self.buffer_duration_seconds * pkt_per_sec)
 
     @property
     def effective_wan_sync_interval(self) -> int:
