@@ -40,14 +40,54 @@ read_env_var() {
 
 resolve_kanvis_os_password() {
   local env_system="$1" app_env="$2"
-  local pw
-  pw="$(read_env_var KANVIS_OS_PASSWORD "$env_system" "$app_env" 2>/dev/null || true)"
-  if [[ -z "$pw" || "$pw" == "change-me-on-install" ]]; then
+  local pw_sys pw_app pw candidate
+  pw_sys="$(read_env_var KANVIS_OS_PASSWORD "$env_system" 2>/dev/null || true)"
+  pw_app="$(read_env_var KANVIS_OS_PASSWORD "$app_env" 2>/dev/null || true)"
+  pw=""
+  for candidate in "$pw_app" "$pw_sys"; do
+    if [[ -n "$candidate" && "$candidate" != "change-me-on-install" ]]; then
+      pw="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$pw" ]]; then
+    if ! command -v openssl &>/dev/null; then
+      install_access_log "ERROR: define KANVIS_OS_PASSWORD en ${env_system} (openssl no disponible para generar una)"
+      return 1
+    fi
     pw="$(openssl rand -base64 18 | tr -d '/+=' | head -c 16)"
-    install_access_log "KANVIS_OS_PASSWORD no definida; generada contraseña temporal (guárdala): ${pw}"
-    install_access_log "  Añádela en ${env_system} como KANVIS_OS_PASSWORD=..."
+    install_access_log "KANVIS_OS_PASSWORD no definida; contraseña temporal generada:"
+    install_access_log "  ${pw}"
+    install_access_log "  Guárdala en ${env_system} → KANVIS_OS_PASSWORD=..."
   fi
   printf '%s' "$pw"
+}
+
+password_contains_username() {
+  local user="$1" pass="$2"
+  local u="${user,,}"
+  local p="${pass,,}"
+  [[ -n "$u" && -n "$p" && "$p" == *"$u"* ]]
+}
+
+set_user_password_hash() {
+  local user="$1" password="$2"
+  if [[ -z "$password" ]]; then
+    install_access_log "ERROR: contraseña vacía para ${user} (missing new password)"
+    return 1
+  fi
+  if password_contains_username "$user" "$password"; then
+    install_access_log "ERROR: la contraseña no puede contener el nombre de usuario (${user})"
+    install_access_log "  PAM rechaza p. ej. Kanvis2026 para el usuario kanvis. Usa otra sin 'kanvis'."
+    return 1
+  fi
+  local hash
+  hash="$(openssl passwd -6 "$password")"
+  # Hash precifrado: evita pam_pwquality ("BAD PASSWORD: contains user name…")
+  if echo "${user}:${hash}" | chpasswd -e 2>/dev/null; then
+    return 0
+  fi
+  usermod -p "$hash" "$user"
 }
 
 setup_kanvis_login_user() {
@@ -65,7 +105,7 @@ setup_kanvis_login_user() {
     fi
   fi
 
-  echo "${user}:${password}" | chpasswd
+  set_user_password_hash "$user" "$password"
   install_access_ok "Contraseña OS aplicada (${user} con sudo)"
 }
 

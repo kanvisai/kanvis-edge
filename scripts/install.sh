@@ -78,9 +78,19 @@ else
   ui_warn "Ya existe ${ENV_SYSTEM} (no se sobrescribe)"
 fi
 mkdir -p "${INSTALL_ROOT}/config/data" "${INSTALL_ROOT}/config/brands"
-ui_detail "Editarás contraseñas y tokens en el paso deploy.sh"
 
-KANVIS_OS_PW="$(resolve_kanvis_os_password "$ENV_SYSTEM" "${INSTALL_ROOT}/.env")"
+ui_section "Contraseña usuario Linux (kanvis)"
+ui_detail "Puedes definirla ANTES del install en el clone:"
+ui_detail "  deploy/network/kanvis-edge.env.example  →  KANVIS_OS_PASSWORD"
+ui_detail "Si no, se genera una temporal y se muestra aquí (cópiala)."
+KANVIS_OS_PW="$(resolve_kanvis_os_password "$ENV_SYSTEM" "${INSTALL_ROOT}/.env")" || {
+  ui_fail "No se pudo obtener KANVIS_OS_PASSWORD"
+  exit 1
+}
+if [[ -z "$KANVIS_OS_PW" ]]; then
+  ui_fail "Contraseña vacía. Edita ${ENV_SYSTEM} y vuelve a ejecutar install.sh"
+  exit 1
+fi
 SSH_EN="$(read_env_var KANVIS_ENABLE_SSH "$ENV_SYSTEM" "${INSTALL_ROOT}/.env" 2>/dev/null || echo true)"
 VNC_EN="$(read_env_var KANVIS_ENABLE_VNC "$ENV_SYSTEM" "${INSTALL_ROOT}/.env" 2>/dev/null || echo true)"
 VNC_DISP="$(read_env_var KANVIS_VNC_DISPLAY "$ENV_SYSTEM" "${INSTALL_ROOT}/.env" 2>/dev/null || echo :1)"
