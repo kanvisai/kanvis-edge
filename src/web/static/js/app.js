@@ -410,14 +410,29 @@ function base64ToBlob(b64, mime) {
 
 function probeResultFromJson(data) {
   const blob = base64ToBlob(data.image_base64, data.content_type || "image/jpeg");
+  const codecErr = data.codec_error || "";
   return {
     objectUrl: URL.createObjectURL(blob),
     codec: data.codec_name || "",
     recommendation: data.recommendation || "",
     hint: data.recommendation_label || "",
     resolution: data.resolution || "",
-    metaError: data.codec_detected ? "" : data.error || "Códec no detectado",
+    metaError: data.codec_detected
+      ? ""
+      : codecErr || "No se detectó códec (el vídeo RTSP sí responde).",
   };
+}
+
+async function assertBroadcastScheduleOk() {
+  const r = await api("/api/v1/operating-schedule");
+  if (r.schedule?.enabled && r.status?.is_active_now === false) {
+    const when = r.status?.local_time
+      ? ` (${r.status.weekday_label || ""} ${r.status.local_time.replace("T", " ")})`
+      : "";
+    throw new Error(
+      `Fuera del horario operativo${when}. Pestaña Sistema → desmarca «Activar horario» o amplía las franjas → Guardar horario.`
+    );
+  }
 }
 
 async function probeDevice(device, channel) {
@@ -1067,9 +1082,7 @@ function renderDevicePanel(device) {
       showProbeCodecBadge(panel, probe);
       const codecLine = probe.codec
         ? `Códec: ${probe.codec}${probe.resolution ? ` (${probe.resolution})` : ""}.`
-        : probe.metaError
-          ? `Códec no detectado: ${probe.metaError}`
-          : "Códec no detectado.";
+        : probe.metaError || "Códec no detectado.";
       const recLine = probe.hint || "";
       setActionMsg(
         msg,
@@ -1340,6 +1353,7 @@ async function toggleBroadcast(device, cam, card) {
   setActionMsg(bcMsg, isOn ? "Desactivando broadcast…" : "Activando broadcast…");
   try {
     if (!isOn) {
+      await assertBroadcastScheduleOk();
       const ov = readBroadcastOverride(device, cam, card);
       const pwd = resolveRtspPassword(device, cam, card) || ov.password || "";
       if (!pwd) {

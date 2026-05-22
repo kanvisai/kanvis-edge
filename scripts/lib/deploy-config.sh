@@ -122,7 +122,8 @@ deploy_seed_config_if_missing() {
     fi
     ui_ok "Creado config/cameras.json (inventario vacío o ejemplo)"
   fi
-  if [[ ! -f "${cfg}/operating_schedule.json" ]] && [[ -f "${repo_root}/config/operating_schedule.example.json" ]]; then
-    cp "${repo_root}/config/operating_schedule.example.json" "${cfg}/operating_schedule.json"
+  if [[ ! -f "${cfg}/operating_schedule.json" ]]; then
+    printf '%s\n' '{"enabled":false,"timezone":"Europe/Madrid","windows":[]}' > "${cfg}/operating_schedule.json"
+    ui_ok "Horario operativo: desactivado por defecto (actívalo en Sistema si lo necesitas)"
   fi
 }

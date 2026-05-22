@@ -56,11 +56,17 @@ class OperatingScheduleService:
 def require_operating_now(service: OperatingScheduleService | None) -> None:
     if service is None:
         return
-    if not service.is_operating_now():
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Fuera del horario operativo configurado "
-                "(búfer y broadcast desactivados). Ajusta el horario en Sistema."
-            ),
-        )
+    if service.is_operating_now():
+        return
+    st = service.get_status()
+    when = ""
+    if st.get("local_time"):
+        when = f" Hora local edge: {st['local_time'].replace('T', ' ')} ({st.get('weekday_label') or ''})."
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Fuera del horario operativo (búfer y broadcast bloqueados)."
+            f"{when} En el panel: pestaña Sistema → desmarca «Activar horario» "
+            "o amplía las franjas y guarda."
+        ),
+    )

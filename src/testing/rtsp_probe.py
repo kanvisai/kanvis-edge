@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 
@@ -60,6 +61,70 @@ def broadcast_recommendation(codec_name: str) -> tuple[str, str]:
     return (
         "rtsp",
         f"Códec «{codec_name}» — prueba RTSP relay; WebRTC solo fiable con H.264.",
+    )
+
+
+_VIDEO_CODEC_RE = re.compile(
+    r"Stream\s+#\d+:\d+.*Video:\s*([a-zA-Z0-9_]+)",
+    re.IGNORECASE,
+)
+
+
+def _probe_ffmpeg_stderr_sync(
+    url: str,
+    ffmpeg_path: str,
+    transport: str,
+    timeout_sec: float,
+) -> RtspStreamProbe:
+    """Fallback: mismo enfoque que la captura JPEG (ffmpeg suele estar en PATH)."""
+    cmd = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "info",
+        "-rtsp_transport",
+        transport or "tcp",
+        "-i",
+        url,
+        "-t",
+        "0.5",
+        "-an",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SnapshotError(f"Timeout ({timeout_sec}s) analizando RTSP con ffmpeg") from exc
+    except FileNotFoundError as exc:
+        raise SnapshotError("ffmpeg no encontrado en PATH") from exc
+
+    stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+    codec = ""
+    for line in stderr.splitlines():
+        m = _VIDEO_CODEC_RE.search(line)
+        if m:
+            codec = m.group(1).strip().lower()
+            if codec in ("h264", "hevc", "h265", "mpeg4", "mjpeg"):
+                break
+    if not codec:
+        tail = stderr[-400:].strip()
+        raise SnapshotError(
+            f"ffmpeg no reportó códec de vídeo"
+            + (f": {tail}" if tail else "")
+        )
+    mode, label = broadcast_recommendation(codec)
+    return RtspStreamProbe(
+        codec_name=codec,
+        codec_long_name=codec,
+        recommendation=mode,
+        recommendation_label=label + " (detectado con ffmpeg)",
     )
 
 
@@ -182,20 +247,25 @@ async def probe_rtsp_stream(
     *,
     allow_pyav_fallback: bool = False,
 ) -> RtspStreamProbe:
-    """Solo ffprobe por defecto (no abre RTSP con PyAV; evita bloquear la cámara)."""
+    """ffprobe → ffmpeg -i (stderr) → opcional PyAV."""
+    tout = min(timeout_sec, 12.0)
     ffprobe = ffprobe_path_from_ffmpeg(ffmpeg_path)
+    errors: list[str] = []
+    try:
+        return await asyncio.to_thread(_probe_sync, url, ffprobe, transport, tout)
+    except SnapshotError as exc:
+        errors.append(f"ffprobe: {exc}")
     try:
         return await asyncio.to_thread(
-            _probe_sync, url, ffprobe, transport, min(timeout_sec, 12.0)
+            _probe_ffmpeg_stderr_sync, url, ffmpeg_path, transport, tout
         )
-    except SnapshotError:
-        if not allow_pyav_fallback:
-            raise
+    except SnapshotError as exc:
+        errors.append(f"ffmpeg: {exc}")
+    if allow_pyav_fallback:
         try:
             return await asyncio.to_thread(
                 _probe_pyav_sync, url, transport, min(timeout_sec, 8.0)
             )
-        except SnapshotError:
-            raise
-        except Exception as exc:
-            raise SnapshotError(str(exc)) from exc
+        except SnapshotError as exc:
+            errors.append(f"pyav: {exc}")
+    raise SnapshotError("; ".join(errors) if errors else "códec no detectado")

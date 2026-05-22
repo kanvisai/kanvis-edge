@@ -434,8 +434,32 @@ async def _probe_camera_rtsp_json_impl(
     settings: AppSettings,
 ) -> dict:
     """JPEG + códec en un solo JSON (recomendado para la UI)."""
+    record = _probe_record_from_body(body)
     try:
-        jpeg, url = await _probe_rtsp_capture_jpeg(body, settings)
+        url = record.rtsp_url(settings=settings)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    transport = (body.transport or "tcp").strip()
+    tout = settings.snapshot_timeout_sec
+    codec_error = ""
+    probe_info = None
+    try:
+        probe_info = await probe_rtsp_stream(
+            url,
+            ffmpeg_path=settings.ffmpeg_path,
+            transport=transport,
+            timeout_sec=min(tout, 10.0),
+        )
+    except SnapshotError as exc:
+        codec_error = str(exc)
+        logger.info("Códec no detectado en probe: %s", exc)
+    try:
+        jpeg = await capture_jpeg_from_rtsp(
+            url,
+            ffmpeg_path=settings.ffmpeg_path,
+            transport=transport,
+            timeout_sec=tout,
+        )
     except HTTPException:
         raise
     except SnapshotError as exc:
@@ -444,28 +468,16 @@ async def _probe_camera_rtsp_json_impl(
         logger.exception("rtsp-probe-json falló")
         raise HTTPException(status_code=502, detail=f"Probe RTSP: {exc}") from exc
 
-    transport = (body.transport or "tcp").strip()
-    probe_info = None
-    try:
-        probe_info = await probe_rtsp_stream(
-            url,
-            ffmpeg_path=settings.ffmpeg_path,
-            transport=transport,
-            timeout_sec=min(settings.snapshot_timeout_sec, 8.0),
-        )
-    except SnapshotError as exc:
-        logger.info("Códec no detectado en probe: %s", exc)
-
     out: dict = {
         "ok": True,
         "image_base64": base64.b64encode(jpeg).decode("ascii"),
         "content_type": "image/jpeg",
         "rtsp_url_masked": _mask_url(url),
-        "codec_detected": False,
+        "codec_detected": bool(probe_info and probe_info.codec_name),
+        "codec_error": codec_error,
     }
     if probe_info:
         out.update(probe_info.as_dict())
-        out["codec_detected"] = bool(probe_info.codec_name)
     return out
 
 
