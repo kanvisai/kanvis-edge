@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -113,12 +113,25 @@ class AppSettings(BaseSettings):
 
     # Reporte IP a nube Kanvis (Fase 6)
     cloud_report_enabled: bool = Field(default=False, alias="CLOUD_REPORT_ENABLED")
-    cloud_report_url: str = Field(default="", alias="CLOUD_REPORT_URL")
-    cloud_report_token: SecretStr | None = Field(default=None, alias="CLOUD_REPORT_TOKEN")
+    cloud_report_url: str = Field(
+        default="",
+        alias="CLOUD_REPORT_URL",
+        description="POST report-public-ip (ej. …/api/v1/kanvis-edges/report-public-ip)",
+    )
+    cloud_access_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CLOUD_ACCESS_TOKEN", "CLOUD_REPORT_TOKEN"),
+        description="access_token del edge en Kanvis (C4); va en el body JSON, no Bearer",
+    )
     cloud_report_on_ip_change_only: bool = Field(
         default=True, alias="CLOUD_REPORT_ON_IP_CHANGE_ONLY"
     )
     device_id: str = Field(default="", alias="DEVICE_ID")
+    device_name: str = Field(
+        default="",
+        alias="DEVICE_NAME",
+        description="Nombre legible de la instalación (tienda, ubicación, etc.)",
+    )
     wan_sync_interval_seconds: int = Field(default=0, alias="WAN_SYNC_INTERVAL_SECONDS")
 
     # Reconexión RTSP / relay FFmpeg
@@ -223,6 +236,7 @@ _YAML_ENV_MAP: dict[tuple[str, str], str] = {
     ("cloud", "cloud_report_url"): "CLOUD_REPORT_URL",
     ("cloud", "cloud_report_on_ip_change_only"): "CLOUD_REPORT_ON_IP_CHANGE_ONLY",
     ("cloud", "device_id"): "DEVICE_ID",
+    ("cloud", "device_name"): "DEVICE_NAME",
     ("cloud", "wan_sync_interval_seconds"): "WAN_SYNC_INTERVAL_SECONDS",
     ("rtsp_client", "reconnect_base_delay"): "RECONNECT_BASE_DELAY",
     ("rtsp_client", "reconnect_max_delay"): "RECONNECT_MAX_DELAY",

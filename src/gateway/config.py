@@ -8,9 +8,12 @@ import yaml
 
 from src.config_loader import AppSettings
 from src.discovery.models import CameraRecord, ExternalAccessMode
+from src.discovery.rtsp_urls import default_gateway_path
 
 
-def _gateway_path(camera: CameraRecord) -> str:
+def _gateway_path(camera: CameraRecord, settings: AppSettings | None = None) -> str:
+    if settings is not None:
+        return default_gateway_path(camera, settings)
     raw = camera.output.gateway.path.strip("/")
     return raw or camera.camera_id
 
@@ -41,9 +44,9 @@ def generate_mediamtx_config(
 
     for camera in cameras_for_gateway(cameras):
         gw = camera.output.gateway
-        path_name = _gateway_path(camera)
+        path_name = _gateway_path(camera, settings)
         entry: dict[str, Any] = {
-            "source": camera.rtsp_url(),
+            "source": camera.rtsp_url(settings=settings),
             "sourceProtocol": camera.source.transport or "tcp",
             "sourceOnDemand": gw.source_on_demand,
             "sourceOnDemandStartTimeout": "10s",
@@ -86,8 +89,8 @@ def gateway_config_signature(
         parts.extend(
             [
                 cam.camera_id,
-                cam.rtsp_url(),
-                _gateway_path(cam),
+                cam.rtsp_url(settings=settings),
+                _gateway_path(cam, settings),
                 str(gw.source_on_demand),
                 str(int(gw.source_on_demand_close_after)),
                 gw.username,
@@ -103,13 +106,46 @@ def build_gateway_client_url(
     *,
     public_host: str | None = None,
 ) -> str:
-    """URL RTSP para clientes externos (VLC, nube)."""
+    """URL RTSP para clientes externos (misma estructura que el fabricante si hay marca)."""
+    from src.discovery.rtsp_urls import build_camera_rtsp_url
+
+    if (camera.source.brand or "").strip():
+        host = public_host
+        if host:
+            port = (
+                settings.rtsp_gateway_port
+                if settings.rtsp_gateway_enabled
+                else settings.edge_rtsp_port
+            )
+            gw = camera.output.gateway
+            user = gw.username or camera.source.username
+            pwd = gw.password.get_secret_value() or camera.source.password.get_secret_value()
+            from src.brands import build_rtsp_template_values, load_brand_profile, render_rtsp_url
+
+            from src.brands.registry import default_brands_dir
+
+            profile = load_brand_profile(
+                camera.source.brand,
+                default_brands_dir(settings.config_dir),
+            )
+            values = build_rtsp_template_values(
+                username=user,
+                password=pwd,
+                host=host,
+                port=port,
+                channel=camera.source.channel or "101",
+            )
+            return render_rtsp_url(profile, mode="stream", values=values)
+        return build_camera_rtsp_url(
+            camera, mode="stream", target="edge", settings=settings
+        )
+
     gw = camera.output.gateway
     host = public_host or settings.rtsp_gateway_listen_host
     if host in ("0.0.0.0", "::", ""):
         host = "127.0.0.1"
     port = settings.rtsp_gateway_port
-    path_name = _gateway_path(camera)
+    path_name = _gateway_path(camera, settings)
     user = gw.username
     pwd = gw.password.get_secret_value()
     auth = f"{user}:{pwd}@" if user else (f":{pwd}@" if pwd else "")

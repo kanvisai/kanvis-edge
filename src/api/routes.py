@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from src.api.dispatcher import VideoDispatcher
 from src.config_loader import AppSettings, get_settings
 from src.discovery.models import CameraCreatePayload, CameraRecord
+from src.discovery.rtsp_urls import default_gateway_path
 from src.discovery.repository import CameraRepository
 from src.ingestion.consumer import StreamConsumerManager
 from src.discovery.scanner import NetworkScanner
@@ -21,6 +22,8 @@ from src.webrtc.manager import WebRtcManager
 from src.relay.worker import _mask_url, build_relay_urls
 from src.discovery.models import ExternalAccessMode
 from src.services.wan_sync import WanSyncService
+from src.brands import list_brand_slugs, load_brand_profile
+from src.brands.registry import default_brands_dir
 
 router = APIRouter(prefix="/api/v1")
 
@@ -68,6 +71,8 @@ async def get_public_config(
 ) -> dict:
     """Resumen de configuración no sensible (para UI futura)."""
     return {
+        "device_id": settings.device_id or None,
+        "device_name": settings.device_name or None,
         "buffer_duration_seconds": settings.buffer_duration_seconds,
         "default_playback_offset_sec": settings.default_playback_offset_sec,
         "default_playback_test_offset_sec": settings.default_playback_test_offset_sec,
@@ -94,6 +99,7 @@ async def system_info(
         deploy_method = "docker"
     return {
         "device_id": device,
+        "device_name": settings.device_name or None,
         "deploy_method": deploy_method,
         "detected_distro": distro,
         "network_mode": settings.network_mode,
@@ -124,6 +130,7 @@ async def connectivity_status(
         "cloud_report_enabled": settings.cloud_report_enabled,
         "interval_seconds": settings.effective_wan_sync_interval,
         "device_id": settings.device_id or "edge",
+        "device_name": settings.device_name or None,
         "port_forwarding_doc": port_matrix_url,
     }
     if settings.ddns_hostname and settings.ddns_provider.value == "duckdns":
@@ -151,6 +158,79 @@ async def connectivity_sync_now(
         )
     state = await wan.sync_once(force_cloud=force)
     return {"ok": True, "state": state.to_dict()}
+
+
+@router.get("/brands")
+async def list_brands(
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> dict:
+    """Marcas disponibles (ficheros en config/brands/*.json)."""
+    root = default_brands_dir(settings.config_dir)
+    slugs = list_brand_slugs(root)
+    items = []
+    for slug in slugs:
+        try:
+            profile = load_brand_profile(slug, root)
+            items.append(
+                {
+                    "slug": slug,
+                    "brand": profile.brand,
+                    "version": profile.version,
+                    "models": profile.models,
+                    "rtsp": {
+                        "stream_template": profile.protocols.rtsp.stream_template,
+                        "playback_template": profile.protocols.rtsp.playback_template,
+                        "time_format": profile.protocols.rtsp.time_format,
+                        "requires_utc": profile.protocols.rtsp.requires_utc,
+                    },
+                }
+            )
+        except (FileNotFoundError, ValueError):
+            continue
+    return {"brands_dir": str(root), "brands": items}
+
+
+@router.get("/brands/{slug}")
+async def get_brand(
+    slug: str,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> dict:
+    root = default_brands_dir(settings.config_dir)
+    try:
+        profile = load_brand_profile(slug, root)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "slug": slug.strip().lower(),
+        "brand": profile.brand,
+        "version": profile.version,
+        "models": profile.models,
+        "protocols": profile.protocols.model_dump(),
+    }
+
+
+@router.get("/cameras/{camera_id}/rtsp-urls")
+async def camera_rtsp_urls(
+    camera_id: str,
+    repo: Annotated[CameraRepository, Depends(get_repository)],
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> dict:
+    """URLs RTSP dispositivo y edge (vivo/playback) según marca."""
+    camera = await repo.get(camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail="Cámara no encontrada")
+    try:
+        urls = camera.rtsp_urls_summary(settings)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    masked = {k: _mask_url(v) for k, v in urls.items()}
+    return {
+        "camera_id": camera_id,
+        "brand": camera.source.brand,
+        "channel": camera.source.channel,
+        "urls_masked": masked,
+        "gateway_path": default_gateway_path(camera, settings),
+    }
 
 
 @router.get("/cameras")
@@ -321,13 +401,24 @@ async def camera_status(
             "configured": False,
             "access_mode": "direct",
             "hint": "Port forwarding WAN → cámara:554 (sin proxy edge)",
-            "source_url_masked": _mask_url(camera.rtsp_url()),
+            "source_url_masked": _mask_url(camera.rtsp_url(settings=settings)),
         }
+    rtsp_urls: dict[str, str] | None = None
+    try:
+        rtsp_urls = {
+            k: _mask_url(v)
+            for k, v in camera.rtsp_urls_summary(settings).items()
+        }
+    except (FileNotFoundError, ValueError, KeyError):
+        rtsp_urls = None
     return {
         "camera_id": camera_id,
         "label": camera.label,
+        "brand": camera.source.brand or None,
+        "channel": camera.source.channel,
         "source_host": camera.source.host,
-        "source_rtsp_url_masked": _mask_url(camera.rtsp_url()),
+        "source_rtsp_url_masked": _mask_url(camera.rtsp_url(settings=settings)),
+        "rtsp_urls_masked": rtsp_urls,
         "ingest": consumer.metrics.snapshot(),
         "buffer_packets": buffer.size(),
         "buffer_span_seconds": round(buffer.span_seconds(), 2),

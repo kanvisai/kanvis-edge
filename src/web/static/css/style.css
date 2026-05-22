@@ -338,3 +338,15 @@ legend {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
+
+input.readonly,
+input[readonly] {
+  opacity: 0.85;
+  cursor: default;
+  background: var(--bg);
+}
+
+.field-hint.muted,
+label.muted {
+  color: var(--muted);
+}

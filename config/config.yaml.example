@@ -63,9 +63,10 @@ ddns:
 
 cloud:
   cloud_report_enabled: false
-  cloud_report_url: "https://api.tu-nube.com/v1/edge/register-ip"
+  cloud_report_url: "http://wudalkot.ddns.net:7777/api/v1/kanvis-edges/report-public-ip"
   cloud_report_on_ip_change_only: true
   device_id: "tienda-001"
+  device_name: "Tienda Centro Madrid"
   wan_sync_interval_seconds: 0
 
 # Matriz de puertos: docs/PORT_FORWARDING.md

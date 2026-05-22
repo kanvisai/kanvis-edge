@@ -1,0 +1,13 @@
+{
+  "brand": "Annke",
+  "version": "1.0.0",
+  "models": [],
+  "protocols": {
+    "rtsp": {
+      "stream_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/Streaming/channels/{{channel}}",
+      "playback_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/Streaming/tracks/{{channel}}?starttime={{starttime}}&endtime={{endtime}}",
+      "time_format": "YYYY-MM-DDTHH:mm:ss[Z]",
+      "requires_utc": true
+    }
+  }
+}

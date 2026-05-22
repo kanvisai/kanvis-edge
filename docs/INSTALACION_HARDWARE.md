@@ -13,14 +13,35 @@ Guía para Raspberry Pi, Jetson Orin Nano, Intel N100 u otro Linux en la tienda.
 
 ## Instalación rápida
 
+Antes de instalar, puedes fijar contraseña y tokens en `.env` y `deploy/network/kanvis-edge.env.example` (se copian a `/etc/kanvis-edge/env`).
+
 ```bash
 cd kanvis-edge
+# Opcional: edita KANVIS_OS_PASSWORD y tokens en .env antes de instalar
 sudo ./scripts/install.sh
-sudo nano /opt/kanvis-edge/.env
+sudo nano /opt/kanvis-edge/.env   # DEVICE_NAME, DEVICE_ID, contraseñas, tokens
 sudo nano /etc/kanvis-edge/env
 sudo systemctl start kanvis-network
 sudo systemctl start kanvis-edge
 ```
+
+### Usuario `kanvis`, SSH y VNC
+
+`install.sh` crea el usuario **`kanvis`** con contraseña **`KANVIS_OS_PASSWORD`** (en `/etc/kanvis-edge/env` o `/opt/kanvis-edge/.env`), grupo **`sudo`**, **OpenSSH** con reenvío **X11** (`ssh -X`) y **VNC**:
+
+| Variable | Default |
+|----------|---------|
+| `KANVIS_OS_PASSWORD` | Obligatoria en producción (`change-me-on-install` genera una temporal en el log) |
+| `KANVIS_ENABLE_SSH` | `true` |
+| `KANVIS_ENABLE_VNC` | `true` |
+| `KANVIS_VNC_DISPLAY` | `:1` (Debian/N100: servicio `kanvis-vnc`; Raspberry Pi OS: VNC de `raspi-config`) |
+
+```bash
+ssh -X kanvis@192.168.192.192    # apps gráficas con +X
+# VNC: <IP>:5901 si display :1 (TigerVNC)
+```
+
+Tokens hacia la nube: [`BACKEND_CLOUD_API.md`](BACKEND_CLOUD_API.md).
 
 ## Modos de red (`/etc/kanvis-edge/env`)
 

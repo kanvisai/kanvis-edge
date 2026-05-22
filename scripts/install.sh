@@ -11,6 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/distro.sh
 source "${SCRIPT_DIR}/lib/distro.sh"
+# shellcheck source=lib/install-access.sh
+source "${SCRIPT_DIR}/lib/install-access.sh"
 
 log() { echo "[install] $*"; }
 
@@ -48,10 +50,6 @@ case "$DISTRO" in
     ;;
 esac
 
-if ! id "$KANVIS_USER" &>/dev/null; then
-  useradd --system --home "$INSTALL_ROOT" --shell /usr/sbin/nologin "$KANVIS_USER"
-fi
-
 log "Copiando a ${INSTALL_ROOT}"
 mkdir -p "$INSTALL_ROOT" /etc/kanvis-edge
 rsync -a --delete \
@@ -69,6 +67,11 @@ if [[ ! -f "$ENV_SYSTEM" ]]; then
 fi
 
 mkdir -p "${INSTALL_ROOT}/config/data"
+
+log "Usuario OS, SSH (+X11) y VNC"
+setup_kanvis_remote_access \
+  "$KANVIS_USER" "$INSTALL_ROOT" "$ENV_SYSTEM" "${INSTALL_ROOT}/.env" "$DISTRO"
+
 chown -R "${KANVIS_USER}:${KANVIS_USER}" "$INSTALL_ROOT"
 
 log "Entorno Python (nativo, sin Docker)"
@@ -124,9 +127,10 @@ log "=== Instalación NATIVA completada ==="
 log "Método: systemd + Python en ${INSTALL_ROOT}"
 log "NO hace falta Docker para el gateway en este dispositivo."
 log ""
-log "  1. Edita ${INSTALL_ROOT}/.env (WEBUI_PASSWORD, JWT_SECRET, API_KEY)"
-log "  2. Edita ${ENV_SYSTEM} (NETWORK_MODE, AP_PASSWORD)"
+log "  1. Edita ${INSTALL_ROOT}/.env (DEVICE_NAME, DEVICE_ID, WEBUI_PASSWORD, JWT_SECRET, API_KEY)"
+log "  2. Edita ${ENV_SYSTEM} (NETWORK_MODE, AP_PASSWORD, KANVIS_OS_PASSWORD)"
 log "  3. sudo systemctl start kanvis-network kanvis-edge"
 log "  4. WiFi kanvis-XXXX → http://192.168.192.192:8000/"
+log "  5. SSH: ssh -X ${KANVIS_USER}@<IP>  |  VNC: ver docs/INSTALACION_HARDWARE.md"
 log ""
 log "Docker (opcional): solo si quieres OTRO despliegue sin AP; ver docs/INSTALACION_HARDWARE.md"

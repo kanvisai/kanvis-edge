@@ -138,7 +138,7 @@ class WebRtcPublisher:
             "Content-Type": "application/sdp",
             "Accept": "application/sdp",
         }
-        token = self._settings.cloud_report_token
+        token = self._settings.cloud_access_token
         if token:
             headers["Authorization"] = f"Bearer {token.get_secret_value()}"
         async with httpx.AsyncClient(timeout=30.0) as client:

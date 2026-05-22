@@ -20,6 +20,7 @@ def test_deploy_files_exist() -> None:
     assert (root / "scripts/kanvis-network.sh").is_file()
     assert (root / "scripts/install.sh").is_file()
     assert (root / "scripts/lib/distro.sh").is_file()
+    assert (root / "scripts/lib/install-access.sh").is_file()
 
 
 def test_detect_distro_script() -> None:

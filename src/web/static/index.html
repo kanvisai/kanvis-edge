@@ -25,7 +25,8 @@
     <header>
       <div>
         <h1>Kanvis Edge Gateway</h1>
-        <span id="user-label" style="color:var(--muted);font-size:0.9rem"></span>
+        <span id="device-label" style="color:var(--muted);font-size:0.9rem;display:block"></span>
+        <span id="user-label" style="color:var(--muted);font-size:0.85rem"></span>
       </div>
       <button type="button" class="secondary" id="btn-logout">Cerrar sesión</button>
     </header>
@@ -53,6 +54,15 @@
             <label><input type="checkbox" id="cam-enabled" checked /> Activa</label>
             <fieldset>
               <legend>RTSP origen</legend>
+              <label>Marca / fabricante</label>
+              <select id="cam-brand">
+                <option value="">— Manual (ruta RTSP propia) —</option>
+              </select>
+              <p id="brand-hint" class="field-hint" style="color:var(--muted);font-size:0.85rem;margin:0.25rem 0 0.75rem"></p>
+              <label>Modelo (opcional)</label>
+              <input id="cam-model" placeholder="Si el perfil lista modelos concretos" />
+              <label>Canal RTSP</label>
+              <input id="cam-channel" value="101" placeholder="101 = main, 102 = sub (Annke/Hik)" />
               <label>Host / IP</label>
               <input id="cam-host" required placeholder="192.168.1.100" />
               <label>Puerto</label>
@@ -61,8 +71,10 @@
               <input id="cam-user" />
               <label>Contraseña</label>
               <input id="cam-pass" type="password" />
-              <label>Ruta RTSP</label>
+              <label id="cam-path-label">Ruta RTSP (solo modo manual)</label>
               <input id="cam-path" value="/Streaming/Channels/101" />
+              <label>Vista previa URL vivo</label>
+              <input id="cam-url-preview" readonly class="readonly" placeholder="Selecciona marca y rellena host…" />
               <label>FPS</label>
               <input id="cam-fps" type="number" value="20" />
             </fieldset>
@@ -172,6 +184,15 @@
 
     <section id="tab-system" class="tab-panel panel hidden">
       <h2>Configuración global</h2>
+      <div class="panel" style="margin-bottom:1rem;padding:0.75rem 1rem">
+        <h3 style="margin:0 0 0.5rem;font-size:1rem">Dispositivo</h3>
+        <p style="margin:0.25rem 0"><strong>Nombre:</strong> <span id="sys-device-name">—</span></p>
+        <p style="margin:0.25rem 0"><strong>ID:</strong> <span id="sys-device-id">—</span></p>
+        <p style="color:var(--muted);font-size:0.85rem;margin:0.5rem 0 0">
+          Edita <code>DEVICE_NAME</code> y <code>DEVICE_ID</code> en
+          <code>/opt/kanvis-edge/.env</code> y reinicia <code>kanvis-edge</code>.
+        </p>
+      </div>
       <div class="actions" style="margin-bottom:0.75rem">
         <button type="button" id="btn-wan-sync">Sincronizar IP (DDNS + nube)</button>
       </div>

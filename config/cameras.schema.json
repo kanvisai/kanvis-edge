@@ -9,6 +9,7 @@
       "camera_id": { "type": "string" },
       "enabled": { "type": "boolean", "default": true },
       "label": { "type": "string" },
+      "brand": { "type": "string", "description": "Slug en config/brands/" },
       "source": {
         "type": "object",
         "required": ["host"],
@@ -17,6 +18,10 @@
           "port": { "type": "integer", "default": 554 },
           "username": { "type": "string" },
           "password": { "type": "string" },
+          "brand": { "type": "string" },
+          "model": { "type": "string" },
+          "channel": { "type": "string", "default": "101" },
+          "time_offset_minutes": { "type": "number", "default": 0 },
           "path": { "type": "string" },
           "transport": { "type": "string", "default": "tcp" },
           "fps": { "type": "integer" },

@@ -16,17 +16,30 @@ def test_wan_sync_enabled_flags() -> None:
 
 
 def test_cloud_payload_shape() -> None:
+    from pydantic import SecretStr
+
     settings = AppSettings.model_construct(
-        device_id="shop-1",
-        ddns_hostname="tienda",
-        ddns_provider=DDNSProvider.DUCKDNS,
-        edge_api_port=8000,
+        device_name="store-01-edge",
+        cloud_access_token=SecretStr("secret-token"),
     )
     svc = WanSyncService(settings)
     payload = svc._cloud_payload("203.0.113.1")
-    assert payload["device_id"] == "shop-1"
-    assert payload["public_ip"] == "203.0.113.1"
-    assert payload["ddns_fqdn"] == "tienda.duckdns.org"
+    assert payload == {
+        "device_name": "store-01-edge",
+        "access_token": "secret-token",
+        "public_ip": "203.0.113.1",
+    }
+
+
+def test_cloud_payload_requires_device_name() -> None:
+    settings = AppSettings.model_construct(device_name="")
+    svc = WanSyncService(settings)
+    try:
+        svc._cloud_payload("1.2.3.4")
+    except ValueError as exc:
+        assert "DEVICE_NAME" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
 
 
 def test_effective_interval() -> None:

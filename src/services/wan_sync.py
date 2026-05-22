@@ -29,8 +29,10 @@ class WanSyncState:
     last_cloud_report_at: str = ""
     last_cloud_report_ok: bool = False
     last_cloud_report_error: str | None = None
+    last_public_ip_updated_at: str = ""
     ddns_hostname: str = ""
     device_id: str = ""
+    device_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -47,6 +49,7 @@ class WanSyncService:
         self._running = False
         self._state = WanSyncState(
             device_id=settings.device_id or "edge",
+            device_name=(settings.device_name or "").strip(),
             ddns_hostname=settings.ddns_hostname,
         )
         self._last_reported_ip: str | None = None
@@ -137,46 +140,54 @@ class WanSyncService:
             body,
         )
 
-    def _cloud_payload(self, public_ip: str) -> dict[str, Any]:
-        host = self._settings.ddns_hostname
-        fqdn = ""
-        if host:
-            if self._settings.ddns_provider == DDNSProvider.DUCKDNS:
-                fqdn = f"{host}.duckdns.org"
-            else:
-                fqdn = host
+    def _cloud_payload(self, public_ip: str) -> dict[str, str]:
+        """
+        Body Kanvis backend: POST /api/v1/kanvis-edges/report-public-ip
+        (device_name + access_token en JSON; sin Authorization Bearer).
+        """
+        device_name = (self._settings.device_name or "").strip()
+        if not device_name:
+            raise ValueError("DEVICE_NAME requerido para reportar IP a Kanvis")
+        token = self._settings.cloud_access_token
+        if not token or not token.get_secret_value().strip():
+            raise ValueError("CLOUD_ACCESS_TOKEN (o CLOUD_REPORT_TOKEN) requerido")
         return {
-            "device_id": self._state.device_id,
-            "public_ip": public_ip,
-            "ddns_hostname": host,
-            "ddns_fqdn": fqdn,
-            "edge_api_port": self._settings.edge_api_port,
-            "edge_rtsp_port": self._settings.edge_rtsp_port,
-            "rtsp_gateway_enabled": self._settings.rtsp_gateway_enabled,
-            "rtsp_gateway_port": self._settings.rtsp_gateway_port,
-            "rtsp_gateway_wan_port": self._settings.rtsp_gateway_wan_port,
-            "ap_ip": self._settings.ap_ip,
-            "network_mode": self._settings.network_mode,
-            "reported_at": self._now_iso(),
+            "device_name": device_name,
+            "access_token": token.get_secret_value(),
+            "public_ip": public_ip.strip(),
         }
 
     async def report_to_cloud(self, public_ip: str) -> None:
-        url = self._settings.cloud_report_url
+        url = self._settings.cloud_report_url.strip()
         if not url:
             raise ValueError("CLOUD_REPORT_URL no configurada")
         headers = {"Content-Type": "application/json", "User-Agent": "kanvis-edge/1.0"}
-        token = self._settings.cloud_report_token
-        if token:
-            headers["Authorization"] = f"Bearer {token.get_secret_value()}"
         payload = self._cloud_payload(public_ip)
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code == 401:
+                raise ValueError(
+                    "Invalid device_name or access_token (HTTP 401); revisa DEVICE_NAME y CLOUD_ACCESS_TOKEN"
+                )
             resp.raise_for_status()
+            data = resp.json() if resp.content else {}
+        if isinstance(data, dict):
+            self._state.last_public_ip_updated_at = str(
+                data.get("last_public_ip_updated_at", "")
+            )
+            if data.get("device_name"):
+                self._state.device_name = str(data["device_name"]).strip()
+            if data.get("public_ip"):
+                self._state.public_ip = str(data["public_ip"])
         self._state.last_cloud_report_ok = True
         self._state.last_cloud_report_error = None
         self._state.last_cloud_report_at = self._now_iso()
         self._last_reported_ip = public_ip
-        logger.info("Reporte nube OK: device=%s ip=%s", self._state.device_id, public_ip)
+        logger.info(
+            "Reporte IP nube OK: device_name=%s public_ip=%s",
+            payload["device_name"],
+            public_ip,
+        )
 
     async def sync_once(self, force_cloud: bool = False) -> WanSyncState:
         """Una pasada: IP + DDNS + nube (si aplica)."""

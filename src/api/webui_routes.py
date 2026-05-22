@@ -53,4 +53,5 @@ async def webui_session(request: Request) -> dict:
         "username": settings.webui_username,
         "authenticated": True,
         "device_id": settings.device_id or None,
+        "device_name": settings.device_name or None,
     }

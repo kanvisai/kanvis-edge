@@ -68,7 +68,9 @@ docker buildx build --platform linux/amd64,linux/arm64 -t kanvis-edge:latest .
 
 Esquema anidado (ver `config/cameras.schema.json`):
 
-- `source` — RTSP entrada (host, port, path, credenciales)
+- `source.brand` — slug en `config/brands/` (ej. `annke`); vivo y playback según plantilla del fabricante
+- `source.channel` — canal RTSP del fabricante (Annke/Hik: `101` main, `102` sub)
+- `source` — RTSP entrada (host, port, credenciales; `path` solo si no hay marca)
 - `output` — relay RTSP / WebRTC (preparado Fase 1–2)
 - `buffer` — `duration_seconds` (default 60), offsets de playback y evento
 
@@ -171,8 +173,9 @@ DDNS_ENABLED=true
 DDNS_HOSTNAME=mi-tienda
 DDNS_TOKEN=...
 CLOUD_REPORT_ENABLED=true
-CLOUD_REPORT_URL=https://api.tu-nube.com/v1/edge/register-ip
-CLOUD_REPORT_TOKEN=...
+CLOUD_REPORT_URL=http://wudalkot.ddns.net:7777/api/v1/kanvis-edges/report-public-ip
+DEVICE_NAME=store-01-edge
+CLOUD_ACCESS_TOKEN=...
 DEVICE_ID=tienda-001
 ```
 

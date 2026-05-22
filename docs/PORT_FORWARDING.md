@@ -34,24 +34,22 @@ Guía para abrir puertos en el **router de la tienda** hacia el **Kanvis Edge** 
    DEVICE_ID=tienda-001
 
    CLOUD_REPORT_ENABLED=true
-   CLOUD_REPORT_URL=https://api.tu-nube.com/v1/edge/register-ip
-   CLOUD_REPORT_TOKEN=...
+   CLOUD_REPORT_URL=http://kanvis-pilot.ai:7777/api/v1/kanvis-edges/report-public-ip
+   DEVICE_NAME=store-01-edge
+   CLOUD_ACCESS_TOKEN=...
    ```
 
-2. La nube recibe periódicamente:
+2. El edge envía (sin Bearer):
    ```json
    {
-     "device_id": "tienda-001",
-     "public_ip": "203.0.113.10",
-     "ddns_hostname": "mi-tienda-001",
-     "ddns_fqdn": "mi-tienda-001.duckdns.org",
-     "edge_api_port": 8000,
-     "edge_rtsp_port": 8554,
-     "reported_at": "2026-05-21T12:00:00+00:00"
+     "device_name": "store-01-edge",
+     "access_token": "...",
+     "public_ip": "203.0.113.10"
    }
    ```
+   Ver [`BACKEND_CLOUD_API.md`](BACKEND_CLOUD_API.md).
 
-3. Tu backend guarda `public_ip` + `ddns_fqdn` y construye URLs:
+3. El backend guarda la IP y puedes construir URLs (DDNS opcional en el edge):
    - API: `http://mi-tienda-001.duckdns.org:55443/api/v1/...`
    - O directamente `http://203.0.113.10:55443/...` si el DDNS tarda en propagar
 

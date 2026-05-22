@@ -114,6 +114,80 @@ $$(".tabs button").forEach((btn) => {
 });
 
 let camerasCache = [];
+let brandsCache = [];
+
+async function loadBrands() {
+  try {
+    const data = await api("/api/v1/brands");
+    brandsCache = data.brands || [];
+    const sel = $("#cam-brand");
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="">— Manual (ruta RTSP propia) —</option>';
+    for (const b of brandsCache) {
+      const opt = document.createElement("option");
+      opt.value = b.slug;
+      opt.textContent = `${b.brand} (${b.slug})`;
+      opt.dataset.streamTemplate = b.rtsp?.stream_template || "";
+      sel.appendChild(opt);
+    }
+    if (current) sel.value = current;
+    updateBrandUi();
+  } catch (err) {
+    console.warn("brands", err);
+  }
+}
+
+function renderUrlPreview() {
+  const sel = $("#cam-brand");
+  const slug = sel?.value || "";
+  const preview = $("#cam-url-preview");
+  if (!preview) return;
+  const host = $("#cam-host")?.value?.trim();
+  const port = $("#cam-port")?.value || "554";
+  const channel = $("#cam-channel")?.value?.trim() || "101";
+  const user = encodeURIComponent($("#cam-user")?.value || "");
+  const pass = encodeURIComponent($("#cam-pass")?.value || "");
+  if (!slug) {
+    const path = $("#cam-path")?.value?.trim() || "/Streaming/Channels/101";
+    const p = path.startsWith("/") ? path : `/${path}`;
+    preview.value = host
+      ? `rtsp://${user ? `${user}:${pass}@` : ""}${host}:${port}${p}`
+      : "";
+    return;
+  }
+  const item = brandsCache.find((b) => b.slug === slug);
+  let tpl = item?.rtsp?.stream_template || sel.selectedOptions[0]?.dataset.streamTemplate || "";
+  tpl = tpl
+    .replace(/\{\{user\}\}/g, user)
+    .replace(/\{\{password\}\}/g, pass)
+    .replace(/\{\{host\}\}/g, host || "{{host}}")
+    .replace(/\{\{port\}\}/g, port)
+    .replace(/\{\{channel\}\}/g, channel);
+  preview.value = tpl;
+}
+
+function updateBrandUi() {
+  const slug = $("#cam-brand")?.value || "";
+  const manual = !slug;
+  $("#cam-path")?.toggleAttribute("disabled", !manual);
+  $("#cam-path-label")?.classList.toggle("muted", !manual);
+  const hint = $("#brand-hint");
+  if (hint) {
+    hint.textContent = manual
+      ? "Sin marca: indica la ruta RTSP completa como en el manual del equipo."
+      : "Con marca: el edge y el gateway usan la plantilla del fabricante (vivo y playback).";
+  }
+  renderUrlPreview();
+}
+
+["cam-brand", "cam-host", "cam-port", "cam-user", "cam-pass", "cam-channel", "cam-path"].forEach(
+  (id) => {
+    document.getElementById(id)?.addEventListener("input", renderUrlPreview);
+    document.getElementById(id)?.addEventListener("change", renderUrlPreview);
+  }
+);
+$("#cam-brand")?.addEventListener("change", updateBrandUi);
 
 async function loadCameras() {
   const list = $("#camera-list");
@@ -147,7 +221,7 @@ async function loadCameras() {
       card.innerHTML = `
         <h3>${cam.label || id}</h3>
         <div>${statusHtml}</div>
-        <div style="color:var(--muted);font-size:0.85rem">${cam.source?.host || cam.ip_address}:${cam.source?.port || 554}</div>
+        <div style="color:var(--muted);font-size:0.85rem">${cam.source?.brand ? cam.source.brand + " · " : ""}${cam.source?.host || cam.ip_address}:${cam.source?.port || 554} · ch ${cam.source?.channel || "—"}</div>
         <div class="actions">
           <button type="button" data-test="${id}">Probar</button>
           <button type="button" class="secondary" data-edit="${id}">Editar</button>
@@ -181,8 +255,12 @@ function fillForm(cam) {
   $("#cam-port").value = s.port || s.rtsp_port || 554;
   $("#cam-user").value = s.username || "";
   $("#cam-pass").value = s.password || "";
+  $("#cam-brand").value = s.brand || "";
+  $("#cam-model").value = s.model || "";
+  $("#cam-channel").value = s.channel || "101";
   $("#cam-path").value = s.path || s.rtsp_path || "/Streaming/Channels/101";
   $("#cam-fps").value = s.fps || 20;
+  updateBrandUi();
   const g = cam.output?.gateway || {};
   $("#gateway-enabled").checked = !!g.enabled;
   $("#gateway-path").value = g.path || cam.camera_id;
@@ -222,7 +300,10 @@ $("#camera-form")?.addEventListener("submit", async (e) => {
       port: parseInt($("#cam-port").value, 10) || 554,
       username: $("#cam-user").value,
       password: $("#cam-pass").value,
-      path: $("#cam-path").value.trim(),
+      brand: $("#cam-brand").value.trim(),
+      model: $("#cam-model").value.trim(),
+      channel: $("#cam-channel").value.trim() || "101",
+      path: $("#cam-brand").value.trim() ? "" : $("#cam-path").value.trim(),
       fps: parseInt($("#cam-fps").value, 10) || 20,
       width: 1280,
       height: 720,
@@ -461,6 +542,9 @@ async function loadSystem() {
       api("/api/v1/connectivity/status").catch(() => ({ state: null })),
     ]);
     $("#connectivity-info").textContent = JSON.stringify(conn, null, 2);
+    $("#sys-device-name").textContent = sys.device_name || "—";
+    $("#sys-device-id").textContent = sys.device_id || "—";
+    updateDeviceHeader(null, sys);
     $("#system-info").textContent = JSON.stringify({ config: cfg, system: sys }, null, 2);
     if (sys.webui_url) {
       toast(`Panel instalación: ${sys.webui_url} · WiFi ${sys.ap_ssid_hint}`);
@@ -470,9 +554,25 @@ async function loadSystem() {
   }
 }
 
+function updateDeviceHeader(session, sys) {
+  const name = sys?.device_name || session?.device_name;
+  const id = sys?.device_id || session?.device_id;
+  const el = $("#device-label");
+  if (!el) return;
+  if (name) {
+    el.textContent = id ? `${name} (${id})` : name;
+  } else if (id) {
+    el.textContent = `Dispositivo: ${id}`;
+  } else {
+    el.textContent = "";
+  }
+}
+
 async function initApp() {
   const session = await api("/api/v1/webui/session");
-  $("#user-label").textContent = session.username || "";
+  $("#user-label").textContent = session.username ? `Usuario: ${session.username}` : "";
+  updateDeviceHeader(session, null);
+  await loadBrands();
   await loadCameras();
 }
 

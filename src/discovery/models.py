@@ -35,17 +35,36 @@ class CameraSource(BaseModel):
     port: int = 554
     username: str = ""
     password: SecretStr = Field(default=SecretStr(""))
-    path: str = "/Streaming/Channels/101"
+    brand: str = Field(
+        default="",
+        description="Slug de config/brands/<slug>.json (p. ej. annke)",
+    )
+    model: str = Field(default="", description="Modelo concreto si el perfil lo restringe")
+    channel: str = Field(
+        default="101",
+        description="Canal lógico RTSP del fabricante (Annke/Hik: 101 main, 102 sub)",
+    )
+    time_offset_minutes: float = Field(
+        default=0.0,
+        description="Desfase horario para playback del fabricante",
+    )
+    path: str = Field(
+        default="",
+        description="Ruta RTSP manual si brand está vacío; si no, se ignora y usa la plantilla",
+    )
     transport: str = "tcp"
     fps: int = 20
     width: int = 1280
     height: int = 720
 
-    def rtsp_url(self) -> str:
+    def rtsp_url_legacy(self) -> str:
         user = self.username
         pwd = self.password.get_secret_value()
         auth = f"{user}:{pwd}@" if user else ""
-        return f"rtsp://{auth}{self.host}:{self.port}{self.path}"
+        path = self.path or "/Streaming/Channels/101"
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return f"rtsp://{auth}{self.host}:{self.port}{path}"
 
     @property
     def resolution(self) -> str:
@@ -152,11 +171,68 @@ class CameraRecord(BaseModel):
     def resolution(self) -> str:
         return self.source.resolution
 
-    def rtsp_url(self, stream_path: str | None = None) -> str:
+    def rtsp_url(self, stream_path: str | None = None, settings: Any | None = None) -> str:
+        from src.discovery.rtsp_urls import build_camera_rtsp_url
+
         if stream_path:
-            src = self.source.model_copy(update={"path": stream_path})
-            return src.rtsp_url()
-        return self.source.rtsp_url()
+            src = self.source.model_copy(update={"path": stream_path, "brand": ""})
+            cam = self.model_copy(update={"source": src})
+            return cam.source.rtsp_url_legacy()
+        return build_camera_rtsp_url(
+            self, mode="stream", target="device", settings=settings
+        )
+
+    def rtsp_playback_url(
+        self,
+        *,
+        starttime: Any,
+        endtime: Any,
+        settings: Any | None = None,
+        target: str = "device",
+    ) -> str:
+        from src.discovery.rtsp_urls import RtspTarget, build_camera_rtsp_url
+
+        return build_camera_rtsp_url(
+            self,
+            mode="playback",
+            target=target,  # type: ignore[arg-type]
+            settings=settings,
+            starttime=starttime,
+            endtime=endtime,
+        )
+
+    def rtsp_urls_summary(self, settings: Any) -> dict[str, str]:
+        from src.discovery.rtsp_urls import build_camera_rtsp_url
+
+        out: dict[str, str] = {
+            "device_stream": build_camera_rtsp_url(
+                self, mode="stream", target="device", settings=settings
+            ),
+        }
+        if (self.source.brand or "").strip():
+            out["edge_stream"] = build_camera_rtsp_url(
+                self, mode="stream", target="edge", settings=settings
+            )
+            from datetime import UTC, datetime, timedelta
+
+            now = datetime.now(UTC)
+            out["device_playback"] = build_camera_rtsp_url(
+                self,
+                mode="playback",
+                target="device",
+                settings=settings,
+                starttime=now - timedelta(seconds=30),
+                endtime=now,
+            )
+            out["edge_playback"] = build_camera_rtsp_url(
+                self,
+                mode="playback",
+                target="edge",
+                settings=settings,
+                starttime=now - timedelta(seconds=30),
+                endtime=now,
+            )
+        return out
 
     def effective_buffer_duration(self, global_default: float) -> float:
         return self.buffer.duration_seconds or global_default
@@ -187,7 +263,11 @@ class CameraRecord(BaseModel):
                 port=src.get("port", 554),
                 username=src.get("username", ""),
                 password=SecretStr(src.get("password", "")),
-                path=src.get("path", "/Streaming/Channels/101"),
+                brand=src.get("brand", ""),
+                model=src.get("model", ""),
+                channel=str(src.get("channel", "101")),
+                time_offset_minutes=float(src.get("time_offset_minutes", 0.0)),
+                path=src.get("path", ""),
                 transport=src.get("transport", "tcp"),
                 fps=src.get("fps", 20),
                 width=src.get("width", 1280),
@@ -335,7 +415,8 @@ class CameraCreatePayload(BaseModel):
                 port=self.rtsp_port or 554,
                 username=self.username or "",
                 password=SecretStr(self.password or ""),
-                path=self.rtsp_path or "/Streaming/Channels/101",
+                brand="",
+                path=self.rtsp_path or "",
                 fps=self.fps or 20,
                 width=width,
                 height=height,
