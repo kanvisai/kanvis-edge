@@ -67,6 +67,14 @@ class AppSettings(BaseSettings):
 
     # WebRTC (reservado Fase 2)
     webrtc_signaling_port: int = Field(default=8188, alias="WEBRTC_SIGNALING_PORT")
+    webrtc_direct_rtsp: bool = Field(
+        default=False,
+        alias="WEBRTC_DIRECT_RTSP",
+        description=(
+            "Si true, WHEP usa una 2ª conexión RTSP (MediaPlayer) en lugar del búfer; "
+            "útil si el visor sale negro pero la ingesta está OK"
+        ),
+    )
 
     # Búfer global (las cámaras pueden sobreescribir en buffer.duration_seconds)
     buffer_duration_seconds: float = Field(default=60.0, alias="BUFFER_DURATION_SECONDS")

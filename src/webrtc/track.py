@@ -10,6 +10,10 @@ import av
 from aiortc import MediaStreamTrack
 
 from src.ingestion.buffer import PacketCircularBuffer, RawPacket
+from src.ingestion.packet_decode import (
+    decode_packet,
+    trim_packets_from_keyframe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,7 @@ class H264PacketVideoTrack(MediaStreamTrack):
         buffer: PacketCircularBuffer,
         target_fps: int = 20,
         video_codec: str | None = None,
+        video_extradata: bytes | None = None,
     ) -> None:
         super().__init__()
         self._live_queue = live_queue
@@ -48,6 +53,7 @@ class H264PacketVideoTrack(MediaStreamTrack):
         self._target_fps = max(1, target_fps)
         self._frame_interval = 1.0 / self._target_fps
         self._codec_order = _codec_try_order(video_codec)
+        self._stream_extradata = video_extradata
         self._decoder: av.codec.context.CodecContext | None = None
         self._active_codec: str | None = None
         self._rewind_packets: list[RawPacket] = []
@@ -69,7 +75,9 @@ class H264PacketVideoTrack(MediaStreamTrack):
 
     async def rewind(self, offset_sec: float) -> int:
         """Reproduce paquetes desde (ahora - offset_sec) antes de volver al vivo."""
-        packets = self._buffer.snapshot_last_seconds(offset_sec)
+        packets = trim_packets_from_keyframe(
+            self._buffer.snapshot_last_seconds(offset_sec)
+        )
         self._rewind_packets = packets
         self._rewind_index = 0
         self._decoder = None
@@ -84,9 +92,20 @@ class H264PacketVideoTrack(MediaStreamTrack):
         idle_loops = 0
         while True:
             raw = await self._next_packet()
-            frames = self._decode_packet(raw)
+            frames, self._decoder, self._active_codec = decode_packet(
+                raw,
+                self._decoder,
+                self._active_codec,
+                self._codec_order,
+                self._stream_extradata,
+            )
             if frames:
                 frame = frames[0]
+                if frame.width and frame.height:
+                    try:
+                        frame = frame.reformat(format="yuv420p")
+                    except av.AVError:
+                        pass
                 frame.pts = self._pts
                 frame.time_base = self._time_base
                 self._pts += int(90000 / self._target_fps)
@@ -95,12 +114,14 @@ class H264PacketVideoTrack(MediaStreamTrack):
                 await asyncio.sleep(self._frame_interval * 0.25)
                 return frame
             idle_loops += 1
-            if idle_loops % 50 == 0:
-                logger.debug(
-                    "WebRTC esperando frame decodable (fallos=%s, rewind=%s/%s)",
+            self._decode_failures += 1
+            if idle_loops == 1 or idle_loops % 100 == 0:
+                logger.warning(
+                    "WebRTC track: sin frame decodable (fallos=%s, rewind=%s/%s, codec=%s)",
                     self._decode_failures,
                     self._rewind_index,
                     len(self._rewind_packets),
+                    self._active_codec or self._codec_order[0],
                 )
             await asyncio.sleep(0.02)
 
@@ -115,47 +136,6 @@ class H264PacketVideoTrack(MediaStreamTrack):
             except asyncio.TimeoutError:
                 await asyncio.sleep(0.05)
 
-    def _open_decoder(self, codec_name: str) -> av.codec.Context | None:
-        name = codec_name
-        if name == "h265":
-            name = "hevc"
-        try:
-            return av.CodecContext.create(name, "r")
-        except av.AVError:
-            return None
-
-    def _decode_packet(self, raw: RawPacket) -> list[av.VideoFrame]:
-        if raw.is_keyframe:
-            self._decoder = None
-            self._active_codec = None
-
-        codecs = list(self._codec_order)
-        if self._active_codec and self._active_codec in codecs:
-            codecs = [self._active_codec] + [c for c in codecs if c != self._active_codec]
-
-        for codec_name in codecs:
-            if self._decoder is None or self._active_codec != codec_name:
-                self._decoder = self._open_decoder(codec_name)
-                if self._decoder is None:
-                    continue
-                self._active_codec = codec_name
-            try:
-                pkt = av.Packet(raw.data)
-                frames = list(self._decoder.decode(pkt))
-                if frames:
-                    return frames
-            except av.AVError:
-                self._decoder = None
-                self._active_codec = None
-                continue
-            except Exception:
-                logger.debug("Decode WebRTC falló (%s)", codec_name, exc_info=True)
-                self._decoder = None
-                self._active_codec = None
-
-        self._decode_failures += 1
-        return []
-
     @property
     def rewind_pending(self) -> int:
         return max(0, len(self._rewind_packets) - self._rewind_index)
@@ -163,6 +143,10 @@ class H264PacketVideoTrack(MediaStreamTrack):
     @property
     def frames_sent(self) -> int:
         return self._frames_out
+
+    @property
+    def decode_failures(self) -> int:
+        return self._decode_failures
 
     def stop(self) -> None:
         self._closed = True

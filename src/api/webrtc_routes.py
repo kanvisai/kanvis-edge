@@ -155,6 +155,9 @@ async def webrtc_status(
         "connection_state": state.connection_state,
         "ice_state": state.ice_state,
         "rewind_packets_pending": state.rewind_packets_pending,
+        "frames_sent": state.frames_sent,
+        "decode_failures": state.decode_failures,
+        "video_source": state.video_source,
         "whip_url": state.whip_url,
         "error": state.error,
     }

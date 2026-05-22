@@ -233,11 +233,16 @@ async def snapshot_buffer(
         )
     ingest = manager.get_consumer(camera_id)
     video_codec = None
+    video_extradata = None
     if ingest:
         video_codec = ingest.metrics.snapshot().get("video_codec")
+        video_extradata = ingest.video_extradata
     try:
         jpeg = capture_jpeg_from_buffer(
-            buffer, offset_sec, video_codec=video_codec
+            buffer,
+            offset_sec,
+            video_codec=video_codec,
+            video_extradata=video_extradata,
         )
     except SnapshotError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

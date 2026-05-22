@@ -52,6 +52,10 @@ class StreamConsumer:
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    @property
+    def video_extradata(self) -> bytes | None:
+        return self.metrics.get_video_extradata()
+
     def bind_async_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
         self._live_queue = asyncio.Queue(maxsize=5000)
@@ -108,6 +112,10 @@ class StreamConsumer:
                 codec_name = getattr(stream.codec, "name", None) or ""
                 if codec_name:
                     self.metrics.set_video_codec(codec_name)
+                ctx = stream.codec_context
+                extra = ctx.extradata
+                if extra:
+                    self.metrics.set_video_extradata(bytes(extra))
 
                 delay = self._settings.reconnect_base_delay
                 self.metrics.on_connected()

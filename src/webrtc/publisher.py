@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
 import httpx
 from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
@@ -19,6 +20,9 @@ from src.discovery.models import CameraRecord, CameraWebRTCOutput
 from src.ingestion.buffer import PacketCircularBuffer
 from src.ingestion.bridge import PacketBridge
 from src.webrtc.track import H264PacketVideoTrack
+
+if TYPE_CHECKING:
+    from aiortc.contrib.media import MediaPlayer
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +42,9 @@ class WebRtcSessionState:
     connection_state: str
     ice_state: str
     rewind_packets_pending: int = 0
+    frames_sent: int = 0
+    decode_failures: int = 0
+    video_source: str = "buffer"
     whip_url: str = ""
     error: str | None = None
 
@@ -74,6 +81,15 @@ def _new_peer_connection(camera: CameraRecord) -> RTCPeerConnection:
     return RTCPeerConnection(configuration=configuration)
 
 
+def _rtsp_player_options() -> dict[str, str]:
+    return {
+        "rtsp_transport": "tcp",
+        "stimeout": "5000000",
+        "fflags": "nobuffer",
+        "flags": "low_delay",
+    }
+
+
 class WebRtcPublisher:
     """Una sesión WebRTC por cámara."""
 
@@ -84,14 +100,18 @@ class WebRtcPublisher:
         packet_bridge: PacketBridge,
         buffer: PacketCircularBuffer,
         video_codec: str | None = None,
+        video_extradata: bytes | None = None,
     ) -> None:
         self._camera = camera
         self._settings = settings
         self._packet_bridge = packet_bridge
         self._buffer = buffer
         self._video_codec = video_codec
+        self._video_extradata = video_extradata
+        self._use_direct_rtsp = settings.webrtc_direct_rtsp
         self._pc: RTCPeerConnection | None = None
         self._track: H264PacketVideoTrack | None = None
+        self._media_player: MediaPlayer | None = None
         self._live_queue: asyncio.Queue | None = None
         self._lock = asyncio.Lock()
         self._last_error: str | None = None
@@ -103,12 +123,17 @@ class WebRtcPublisher:
 
     def get_state(self) -> WebRtcSessionState:
         pc = self._pc
+        track = self._track
+        source = "direct_rtsp" if self._media_player else "buffer"
         return WebRtcSessionState(
             camera_id=self.camera_id,
             mode=webrtc_mode(self._camera.output.webrtc).value,
             connection_state=pc.connectionState if pc else "new",
             ice_state=pc.iceConnectionState if pc else "new",
-            rewind_packets_pending=self._track.rewind_pending if self._track else 0,
+            rewind_packets_pending=track.rewind_pending if track else 0,
+            frames_sent=track.frames_sent if track else 0,
+            decode_failures=track.decode_failures if track else 0,
+            video_source=source,
             whip_url=self._camera.output.webrtc.signaling_url,
             error=self._last_error,
         )
@@ -121,8 +146,22 @@ class WebRtcPublisher:
                 self._buffer,
                 target_fps=self._camera.source.fps,
                 video_codec=self._video_codec,
+                video_extradata=self._video_extradata,
             )
         return self._track
+
+    def _start_direct_rtsp_player(self) -> None:
+        from aiortc.contrib.media import MediaPlayer
+
+        url = self._camera.rtsp_url()
+        self._media_player = MediaPlayer(
+            url,
+            format="rtsp",
+            options=_rtsp_player_options(),
+        )
+        if self._media_player.video is None:
+            raise RuntimeError("RTSP directo sin pista de vídeo (revisa URL/credenciales)")
+        logger.info("WebRTC %s: fuente RTSP directa (MediaPlayer)", self.camera_id)
 
     async def handle_offer(
         self, sdp: str, sdp_type: str = "offer"
@@ -131,16 +170,21 @@ class WebRtcPublisher:
         async with self._lock:
             await self.close()
             self._pc = _new_peer_connection(self._camera)
-            track = self._ensure_track()
-            primed = await track.prime_from_buffer(
-                self._camera.output.webrtc.rewind_offset_sec
-            )
-            if primed == 0:
-                logger.warning(
-                    "WebRTC %s: búfer vacío al conectar; espera ingesta RTSP",
-                    self.camera_id,
+            if self._use_direct_rtsp:
+                self._start_direct_rtsp_player()
+                assert self._media_player is not None
+                self._pc.addTrack(self._media_player.video)
+            else:
+                track = self._ensure_track()
+                primed = await track.prime_from_buffer(
+                    self._camera.output.webrtc.rewind_offset_sec
                 )
-            self._pc.addTrack(track)
+                if primed == 0:
+                    logger.warning(
+                        "WebRTC %s: búfer vacío al conectar; espera ingesta RTSP",
+                        self.camera_id,
+                    )
+                self._pc.addTrack(track)
             await self._pc.setRemoteDescription(
                 RTCSessionDescription(sdp=sdp, type=sdp_type)
             )
@@ -187,6 +231,8 @@ class WebRtcPublisher:
         )
 
     async def rewind(self, offset_sec: float | None = None) -> int:
+        if self._media_player:
+            raise ValueError("rewind no disponible con WEBRTC_DIRECT_RTSP=true")
         track = self._ensure_track()
         offset = offset_sec or self._camera.output.webrtc.rewind_offset_sec
         return await track.rewind(offset)
@@ -216,6 +262,9 @@ class WebRtcPublisher:
         if self._live_queue:
             self._packet_bridge.unsubscribe(self._live_queue)
             self._live_queue = None
+        if self._media_player:
+            self._media_player.stop()
+            self._media_player = None
         if self._pc:
             await self._pc.close()
             self._pc = None

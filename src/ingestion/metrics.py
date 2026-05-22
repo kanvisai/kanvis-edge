@@ -17,11 +17,20 @@ class IngestMetrics:
     connected_since: float | None = None
     last_error: str | None = None
     video_codec: str | None = None
+    video_extradata: bytes | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def set_video_codec(self, name: str | None) -> None:
         with self._lock:
             self.video_codec = (name or "").strip() or None
+
+    def set_video_extradata(self, data: bytes | None) -> None:
+        with self._lock:
+            self.video_extradata = data if data else None
+
+    def get_video_extradata(self) -> bytes | None:
+        with self._lock:
+            return self.video_extradata
 
     def on_connected(self) -> None:
         now = time.monotonic()
@@ -68,4 +77,7 @@ class IngestMetrics:
                 "connected_uptime_sec": round(uptime, 2),
                 "last_error": self.last_error,
                 "video_codec": self.video_codec,
+                "video_extradata_bytes": (
+                    len(self.video_extradata) if self.video_extradata else 0
+                ),
             }
