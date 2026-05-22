@@ -112,9 +112,72 @@ function hostToSlug(host) {
   return hostKey(host).replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
 }
 
-function makeCameraId(host, channel) {
+function channelSlug(channel) {
+  const raw = String(channel ?? "101").trim() || "101";
+  const slug = raw.toLowerCase().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
+  return slug || "101";
+}
+
+/** ID antiguo (solo dígitos): stream1→ch1, stream2→ch2 — compatibilidad */
+function legacyMakeCameraId(host, channel) {
   const ch = String(channel || "101").replace(/\D/g, "") || "101";
   return `cam-${hostToSlug(host)}-ch${ch}`;
+}
+
+function makeCameraId(host, channel) {
+  return `cam-${hostToSlug(host)}-ch-${channelSlug(channel)}`;
+}
+
+function findCameraByHostChannel(host, channel) {
+  const hk = hostKey(host);
+  const ch = String(channel);
+  return camerasCache.find(
+    (c) =>
+      hostKey(c.source?.host || c.ip_address || "") === hk &&
+      String(c.source?.channel ?? "") === ch
+  );
+}
+
+function resolveCameraId(host, channel) {
+  const found = findCameraByHostChannel(host, channel);
+  if (found) return found.camera_id;
+  const id = makeCameraId(host, channel);
+  if (camerasCache.some((c) => c.camera_id === id)) return id;
+  const legacy = legacyMakeCameraId(host, channel);
+  if (camerasCache.some((c) => c.camera_id === legacy)) return legacy;
+  return id;
+}
+
+function mergeChannelLists(apiChannels, draftChannels) {
+  const byCh = new Map();
+  for (const ch of apiChannels || []) {
+    if (ch.saved !== false && ch.camera) {
+      byCh.set(String(ch.channel), { ...ch, saved: true, camera: ch.camera });
+    }
+  }
+  for (const ch of draftChannels || []) {
+    if (!ch.saved) {
+      const key = String(ch.channel);
+      if (!byCh.has(key)) byCh.set(key, ch);
+    }
+  }
+  return [...byCh.values()].sort((a, b) =>
+    String(a.channel).localeCompare(String(b.channel))
+  );
+}
+
+function syncDeviceChannelsFromCache(device) {
+  if (!device?.host?.trim()) return;
+  const hk = hostKey(device.host);
+  const fromApi = camerasCache
+    .filter((c) => hostKey(c.source?.host || "") === hk)
+    .map((cam) => ({
+      channel: cam.source?.channel || "101",
+      saved: true,
+      camera: cam,
+    }));
+  const unsaved = (device.channels || []).filter((c) => !c.saved);
+  device.channels = mergeChannelLists(fromApi, unsaved);
 }
 
 function groupCamerasByHost(cameras) {
@@ -181,7 +244,7 @@ function mergeDraftWithSaved(draft, dev) {
         : dev.password || "",
     probeChannel: draft.probeChannel ?? dev.probeChannel,
     broadcastMode: draft.broadcastMode ?? dev.broadcastMode,
-    channels: draft.channels?.length ? draft.channels : dev.channels,
+    channels: mergeChannelLists(dev.channels, draft.channels),
     fromApi: draft.fromApi !== undefined ? draft.fromApi : dev.fromApi,
   };
 }
@@ -192,11 +255,6 @@ function getAllDevices() {
   for (const [key, dev] of saved) {
     const draft = list.find((d) => d.key === key);
     if (draft) {
-      for (const ch of dev.channels) {
-        if (!draft.channels.some((c) => c.channel === ch.channel)) {
-          draft.channels.push({ ...ch });
-        }
-      }
       const i = list.indexOf(draft);
       list[i] = mergeDraftWithSaved(draft, dev);
     } else {
@@ -231,7 +289,8 @@ function defaultChannelsForBrand(slug) {
 }
 
 function buildCameraPayload(device, channel, label, opts = {}) {
-  const id = makeCameraId(device.host, channel);
+  const id =
+    opts.cameraId ?? resolveCameraId(device.host, channel) ?? makeCameraId(device.host, channel);
   const mode = opts.broadcastMode || device.broadcastMode || "rtsp";
   const broadcastOn = !!opts.broadcastOn;
   const relayOn = broadcastOn && mode !== "webrtc";
@@ -333,6 +392,7 @@ async function loadCameras() {
       const draft = draftDevices.find((d) => d.key === key);
       if (draft && cam.source?.password) draft.password = cam.source.password;
     }
+    for (const d of draftDevices) syncDeviceChannelsFromCache(d);
     renderDevices();
   } catch (err) {
     toast(err.message, true);
@@ -395,7 +455,8 @@ function renderDeviceNav(devices) {
 }
 
 function getSavedChannels(device) {
-  return device.channels.filter((c) => c.saved && c.camera);
+  syncDeviceChannelsFromCache(device);
+  return device.channels.filter((c) => c.saved && c.camera?.camera_id);
 }
 
 function ensureActiveChannel(device) {
@@ -599,7 +660,15 @@ function readBroadcastOverride(device, cam, card) {
 
 function renderChannelPanel(device, chState, root) {
   const ch = chState.channel;
-  const cam = chState.camera;
+  let cam = chState.camera;
+  if (!cam?.camera_id) {
+    cam = findCameraByHostChannel(device.host, ch);
+    if (cam) chState.camera = cam;
+  }
+  if (!cam?.camera_id) {
+    root.innerHTML = `<p class="hint err-text">Canal ${escapeHtml(ch)} sin datos en el servidor. Vuelve a guardarlo con «+ Añadir canal».</p>`;
+    return;
+  }
   const cameraId = cam.camera_id;
   const mode = device.broadcastMode || "rtsp";
   const src = cam.source || {};
@@ -607,6 +676,7 @@ function renderChannelPanel(device, chState, root) {
   const card = document.createElement("div");
   card.className = "channel-card";
   card.dataset.cameraId = cameraId;
+  card.dataset.channelKey = ch;
 
   card.innerHTML = `
     <header>
@@ -804,6 +874,8 @@ function renderDevicePanel(device) {
       await persistCamera(device, ch, `${device.host} ch${ch}`);
       toast(`Canal ${ch} guardado`);
       await loadCameras();
+      syncDeviceChannelsFromCache(device);
+      upsertDeviceDraft(device);
       device.activeChannel = ch;
       activeDeviceKey = device.key;
       renderDevices();
@@ -861,10 +933,9 @@ function renderDevices() {
 }
 
 async function persistCamera(device, channel, label) {
-  const cameraId = makeCameraId(device.host, channel);
-  const payload = buildCameraPayload(device, channel, label);
-  payload.camera_id = cameraId;
-  const existing = camerasCache.find((c) => c.camera_id === cameraId);
+  const existing = findCameraByHostChannel(device.host, channel);
+  const cameraId = existing?.camera_id ?? makeCameraId(device.host, channel);
+  const payload = buildCameraPayload(device, channel, label, { cameraId });
   if (existing) {
     await api(`/api/v1/cameras/${cameraId}`, { method: "PUT", json: payload });
   } else {
@@ -879,15 +950,13 @@ async function saveCameraDevice(device, panel) {
   const channel = String(device.probeChannel || "101").trim();
   try {
     await persistCamera(device, channel, `${device.host} ch${channel}`);
-    if (!device.channels.some((c) => c.channel === channel)) {
-      device.channels.unshift({ channel, saved: true, camera: null });
-    }
     draftDevices = draftDevices.filter((d) => d.key !== device.key);
     device.key = hostKey(device.host);
     device.fromApi = true;
     device.probeOk = true;
-    upsertDeviceDraft(device);
     await loadCameras();
+    syncDeviceChannelsFromCache(device);
+    upsertDeviceDraft(device);
     activeDeviceKey = device.key;
     device.activeChannel = channel;
     toast(`Cámara guardada (canal ${channel}). Activa broadcast en el canal.`);
@@ -972,7 +1041,15 @@ async function waitForIngest(cameraId, maxMs = 15000) {
 }
 
 async function toggleBroadcast(device, cam, card) {
-  const cameraId = cam.camera_id;
+  const cameraId =
+    cam?.camera_id ||
+    resolveCameraId(device.host, cam?.source?.channel || card.dataset.channelKey);
+  if (!camerasCache.some((c) => c.camera_id === cameraId)) {
+    throw new Error(
+      `Cámara no encontrada (${cameraId}). Guarda el canal de nuevo con «+ Añadir canal».`
+    );
+  }
+  if (cam && !cam.camera_id) cam.camera_id = cameraId;
   const mode =
     card.querySelector(`input[name="bc-mode-${cameraId}"]:checked`)?.value ||
     device.broadcastMode ||
@@ -1104,14 +1181,27 @@ async function testPlaybackBuffer(cameraId, card) {
 }
 
 async function deleteCamera(id) {
-  if (!confirm(`¿Eliminar canal ${id}?`)) return;
+  const cam = camerasCache.find((c) => c.camera_id === id);
+  const chLabel = cam?.source?.channel || id;
+  if (!confirm(`¿Eliminar el canal ${chLabel}?`)) return;
   try {
     if (KanvisWebRtcViewer.getActiveCameraId() === id) {
       await KanvisWebRtcViewer.disconnect(api, id);
     }
     await api(`/api/v1/cameras/${id}`, { method: "DELETE" });
-    toast("Canal eliminado");
+    camerasCache = camerasCache.filter((c) => c.camera_id !== id);
+    const hk = cam ? hostKey(cam.source?.host || "") : null;
+    for (const d of draftDevices) {
+      if (hk && hostKey(d.host) !== hk) continue;
+      d.channels = (d.channels || []).filter((c) => c.camera?.camera_id !== id);
+      if (d.activeChannel === chLabel) {
+        const rest = getSavedChannels(d);
+        d.activeChannel = rest[0]?.channel ?? null;
+      }
+    }
+    toast(`Canal ${chLabel} eliminado`);
     await loadCameras();
+    renderDevices();
   } catch (err) {
     toast(err.message, true);
   }
