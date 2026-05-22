@@ -258,6 +258,16 @@ function selectDevice(key) {
   renderDevices();
 }
 
+/** Actualiza pestaña y título sin re-renderizar el formulario (evita perder foco al escribir). */
+function updateDeviceNavLabel(device) {
+  const label = device.host?.trim() || "Nueva IP";
+  $("#device-nav")?.querySelectorAll(".device-tab").forEach((btn) => {
+    if (btn.classList.contains("active")) btn.textContent = label;
+  });
+  const badge = $("#device-panels")?.querySelector(".device-card .ip-badge");
+  if (badge) badge.textContent = label === "Nueva IP" ? "Nueva cámara" : label;
+}
+
 function addDraftDevice() {
   const key = `draft-${Date.now()}`;
   draftDevices.push({
@@ -432,7 +442,7 @@ function renderDevicePanel(device) {
 
   bind(".dev-host", (e) => {
     device.host = e.target.value;
-    renderDevices();
+    updateDeviceNavLabel(device);
   });
   bind(".dev-port", (e) => {
     device.port = e.target.value;
