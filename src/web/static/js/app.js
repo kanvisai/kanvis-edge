@@ -263,7 +263,11 @@ async function probeDevice(device, channel) {
   if (!body.brand) {
     throw new Error("Elige la marca (Annke, etc.) para armar la URL RTSP");
   }
-  const paths = ["/api/v1/rtsp/probe", "/api/v1/cameras/probe"];
+  const paths = [
+    "/api/v1/tools/rtsp-probe",
+    "/api/v1/rtsp/probe",
+    "/api/v1/cameras/probe",
+  ];
   let lastErr;
   for (const path of paths) {
     try {
@@ -275,7 +279,9 @@ async function probeDevice(device, channel) {
       if (!msg.includes("404") && !msg.includes("405")) throw err;
     }
   }
-  throw lastErr || new Error("Probe no disponible en el servidor (¿falta deploy?)");
+  throw new Error(
+    `${lastErr?.message || "Probe no disponible"}. En el guardia ejecuta: sudo ./scripts/deploy.sh --yes y recarga la web (Ctrl+F5). Comprueba: curl http://127.0.0.1:8000/api/v1/health`
+  );
 }
 
 async function loadBrands() {

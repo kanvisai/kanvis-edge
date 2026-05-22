@@ -78,8 +78,18 @@ def get_schedule_service(request: Request) -> OperatingScheduleService:
 
 
 @router.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict:
+    return {
+        "status": "ok",
+        "ui_version": "2025-05-rtsp-probe-tools",
+        "features": {
+            "rtsp_probe_tools": True,
+            "rtsp_probe_paths": [
+                "/api/v1/tools/rtsp-probe",
+                "/api/v1/rtsp/probe",
+            ],
+        },
+    }
 
 
 @router.get("/operating-schedule")
@@ -303,12 +313,21 @@ async def _probe_camera_rtsp_impl(
     )
 
 
+@router.post("/tools/rtsp-probe")
+async def probe_camera_rtsp_tools(
+    body: CameraProbeRequest,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> Response:
+    """Vista previa RTSP (UI). Ruta sin conflicto con /cameras/{camera_id}."""
+    return await _probe_camera_rtsp_impl(body, settings)
+
+
 @router.post("/rtsp/probe")
 async def probe_camera_rtsp(
     body: CameraProbeRequest,
     settings: Annotated[AppSettings, Depends(get_app_settings)],
 ) -> Response:
-    """Vista previa RTSP (UI). Ruta fija para no confundir con camera_id=probe."""
+    """Alias de tools/rtsp-probe."""
     return await _probe_camera_rtsp_impl(body, settings)
 
 
