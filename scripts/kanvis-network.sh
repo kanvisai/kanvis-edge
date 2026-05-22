@@ -59,6 +59,14 @@ iface_exists() {
   ip link show "$1" &>/dev/null
 }
 
+# Evita "address already in use (port 53)" con systemd-resolved / dnsmasq del sistema.
+prepare_dnsmasq_for_ap() {
+  systemctl stop dnsmasq.service 2>/dev/null || true
+  systemctl disable dnsmasq.service 2>/dev/null || true
+  pkill -x dnsmasq 2>/dev/null || true
+  sleep 0.5
+}
+
 setup_lan() {
   if ! iface_exists "$LAN_INTERFACE"; then
     log "Interfaz LAN ${LAN_INTERFACE} no encontrada — omitiendo"
@@ -105,8 +113,13 @@ setup_ap() {
   fi
 
   if command -v dnsmasq &>/dev/null; then
+    prepare_dnsmasq_for_ap
     pkill -f "dnsmasq.*${DNSMASQ_CONF}" 2>/dev/null || true
-    dnsmasq -C "$DNSMASQ_CONF" -x "${STATE_DIR}/dnsmasq.pid"
+    if ! dnsmasq -C "$DNSMASQ_CONF" -x "${STATE_DIR}/dnsmasq.pid"; then
+      log "ERROR: dnsmasq no arrancó (revisa journalctl -u kanvis-network). Si persiste puerto 53: systemctl status systemd-resolved"
+      exit 1
+    fi
+    log "dnsmasq AP: solo DHCP (port=0, sin DNS en :53)"
   else
     log "AVISO: dnsmasq no instalado — clientes WiFi sin DHCP"
   fi
