@@ -151,11 +151,16 @@ class WanSyncService:
         token = self._settings.cloud_access_token
         if not token or not token.get_secret_value().strip():
             raise ValueError("CLOUD_ACCESS_TOKEN (o CLOUD_REPORT_TOKEN) requerido")
-        return {
+        payload: dict[str, str] = {
             "device_name": device_name,
             "access_token": token.get_secret_value(),
             "public_ip": public_ip.strip(),
         }
+        # Etiqueta de host en backend (no implica DDNS_ENABLED ni resolución DNS pública).
+        host_label = (self._settings.ddns_hostname or "").strip()
+        if host_label:
+            payload["ddns_hostname"] = host_label
+        return payload
 
     async def report_to_cloud(self, public_ip: str) -> None:
         url = self._settings.cloud_report_url.strip()

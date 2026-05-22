@@ -45,9 +45,12 @@ curl -H "X-API-Key: TU_API_KEY" -X POST http://127.0.0.1:8000/api/v1/connectivit
 {
   "device_name": "store-01-edge",
   "access_token": "your-secret-token-from-registration",
-  "public_ip": "203.0.113.55"
+  "public_ip": "203.0.113.55",
+  "ddns_hostname": "mi-tienda"
 }
 ```
+
+`ddns_hostname` es **opcional**: etiqueta configurada en el edge (`DDNS_HOSTNAME`). No implica que el edge actualice DuckDNS ni que la nube resuelva DNS; sirve para guardar en BD junto a `public_ip` y localizar el edge por nombre.
 
 **Éxito — HTTP 200:**
 

@@ -20,6 +20,7 @@ def test_cloud_payload_shape() -> None:
 
     settings = AppSettings.model_construct(
         device_name="store-01-edge",
+        ddns_hostname="mi-tienda",
         cloud_access_token=SecretStr("secret-token"),
     )
     svc = WanSyncService(settings)
@@ -28,6 +29,7 @@ def test_cloud_payload_shape() -> None:
         "device_name": "store-01-edge",
         "access_token": "secret-token",
         "public_ip": "203.0.113.1",
+        "ddns_hostname": "mi-tienda",
     }
 
 
