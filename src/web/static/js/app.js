@@ -51,7 +51,7 @@ async function api(path, opts = {}) {
       const j = await res.json();
       detail = j.detail || JSON.stringify(j);
     } catch (_) {}
-    throw new Error(detail);
+    throw new Error(`HTTP ${res.status} · ${detail}`);
   }
   if (res.status === 204) return null;
   const ct = res.headers.get("content-type") || "";
@@ -222,17 +222,33 @@ function buildCameraPayload(device, channel, label, opts = {}) {
 }
 
 async function probeDevice(device, channel) {
+  const ch = String(channel ?? device.probeChannel ?? "").trim() || "101";
+  device.probeChannel = ch;
   const body = {
     host: device.host.trim(),
     port: parseInt(device.port, 10) || 554,
     username: device.username || "",
     password: device.password || "",
-    brand: device.brand || "",
-    channel: String(channel || device.probeChannel || "101"),
+    brand: (device.brand || "").trim(),
+    channel: ch,
     transport: "tcp",
   };
-  const blob = await api("/api/v1/rtsp/probe", { method: "POST", json: body });
-  return URL.createObjectURL(blob);
+  if (!body.brand) {
+    throw new Error("Elige la marca (Annke, etc.) para armar la URL RTSP");
+  }
+  const paths = ["/api/v1/rtsp/probe", "/api/v1/cameras/probe"];
+  let lastErr;
+  for (const path of paths) {
+    try {
+      const blob = await api(path, { method: "POST", json: body });
+      return URL.createObjectURL(blob);
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err.message || "");
+      if (!msg.includes("404") && !msg.includes("405")) throw err;
+    }
+  }
+  throw lastErr || new Error("Probe no disponible en el servidor (¿falta deploy?)");
 }
 
 async function loadBrands() {
@@ -407,7 +423,7 @@ function renderDevicePanel(device) {
       </div>
       <div>
         <label>Canal (prueba)</label>
-        <input class="dev-probe-ch" value="${device.probeChannel || "101"}" inputmode="numeric" />
+        <input class="dev-probe-ch" value="${device.probeChannel || "101"}" placeholder="101" inputmode="numeric" />
       </div>
       <div>
         <label>Usuario</label>
@@ -424,6 +440,7 @@ function renderDevicePanel(device) {
         <p class="probe-placeholder">Prueba la URL RTSP antes de guardar</p>
       </div>
       <button type="button" class="btn-block secondary" data-probe="">Probar conexión</button>
+      <p class="probe-net hint">La prueba RTSP la hace el <strong>servidor Kanvis</strong> (no el navegador). Debe poder abrir <code>host:puerto</code> desde ese equipo.</p>
       <p class="probe-msg hint"></p>
     </div>
     <p class="section-label">2 · Guardar</p>
@@ -454,7 +471,7 @@ function renderDevicePanel(device) {
     device.password = e.target.value;
   });
   bind(".dev-probe-ch", (e) => {
-    device.probeChannel = e.target.value;
+    device.probeChannel = e.target.value.trim() || "101";
   });
   panel.querySelector(".dev-brand")?.addEventListener("change", (e) => {
     device.brand = e.target.value;
