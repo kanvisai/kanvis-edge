@@ -428,16 +428,77 @@ def _camera_with_source_overrides(
     return CameraRecord.from_storage(data)
 
 
+def _is_loopback_host(host: str) -> bool:
+    h = (host or "").split(":")[0].strip().lower()
+    return h in ("localhost", "127.0.0.1", "::1", "[::1]")
+
+
+def _resolve_panel_urls(request: Request, settings: AppSettings) -> dict[str, str]:
+    """URL para enlaces en la UI: prioriza EDGE_PANEL_PUBLIC_URL, no localhost si hay IP WAN."""
+    scheme = (
+        (request.headers.get("x-forwarded-proto") or request.url.scheme or "http")
+        .split(",")[0]
+        .strip()
+    )
+    host_raw = (
+        (request.headers.get("x-forwarded-host") or request.headers.get("host") or "")
+        .split(",")[0]
+        .strip()
+    )
+    port = settings.edge_api_port
+    access_base = f"{scheme}://{host_raw}".rstrip("/") if host_raw else ""
+
+    configured = (settings.edge_panel_public_url or "").strip().rstrip("/")
+    wan = getattr(request.app.state, "wan_sync_service", None)
+    wan_ip = (wan.state.public_ip.strip() if wan and wan.state.public_ip else "")
+
+    public_base = ""
+    note = ""
+
+    if configured:
+        public_base = configured
+        note = "URL pública de EDGE_PANEL_PUBLIC_URL en /etc/kanvis-edge/env."
+    elif host_raw and not _is_loopback_host(host_raw):
+        public_base = access_base
+        note = "Misma dirección con la que abriste este panel en el navegador."
+    elif wan_ip:
+        public_base = f"{scheme}://{wan_ip}:{port}"
+        if access_base and _is_loopback_host(host_raw):
+            note = (
+                f"Abres el panel por {host_raw or 'localhost'} (túnel o equipo local). "
+                f"Desde internet o otro PC usa la URL pública de abajo (reenvía el puerto {port})."
+            )
+        else:
+            note = "URL con la IP pública detectada del edge (WAN sync)."
+    else:
+        lan = settings.ap_ip or "192.168.192.192"
+        public_base = f"{scheme}://{lan}:{port}"
+        note = (
+            f"Configura EDGE_PANEL_PUBLIC_URL=http://TU_IP:8000 en /etc/kanvis-edge/env. "
+            f"Mientras tanto, en la LAN del edge: {public_base}"
+        )
+
+    api_base = public_base or access_base or f"{scheme}://127.0.0.1:{port}"
+    return {
+        "api_base": api_base,
+        "access_url": access_base,
+        "public_url": public_base,
+        "url_note": note,
+        "lan_ip": settings.ap_ip or "IP_LAN_DEL_EDGE",
+    }
+
+
 def _build_camera_access_info(
     camera: CameraRecord,
     camera_id: str,
     *,
-    api_base: str,
-    lan_ip: str,
+    panel_urls: dict[str, str],
     settings: AppSettings,
     relay_manager: RelayManager,
     preview: bool = False,
 ) -> dict:
+    api_base = panel_urls["api_base"]
+    lan_ip = panel_urls["lan_ip"]
     device_rtsp = ""
     device_rtsp_masked = ""
     try:
@@ -490,37 +551,29 @@ def _build_camera_access_info(
         elif relay_preview:
             relay_block = {"enabled": True, **relay_preview}
 
+    panel_url = f"{api_base}/"
     whep_url = f"{api_base}/api/v1/webrtc/{camera_id}/offer"
     status_url = f"{api_base}/api/v1/webrtc/{camera_id}/status"
     login_url = f"{api_base}/api/v1/webui/login"
-    curl_probe = (
-        f"# 1) Token (usuario/contraseña del panel)\n"
-        f'TOKEN=$(curl -sS -X POST "{login_url}" \\\n'
-        f'  -H "Content-Type: application/json" \\\n'
-        f'  -d \'{{"username":"admin","password":"TU_PASS"}}\' \\\n'
-        f"  | python3 -c \"import sys,json; print(json.load(sys.stdin)['access_token'])\")\n\n"
-        f"# 2) Estado (broadcast WebRTC activo)\n"
-        f'curl -sS -H "Authorization: Bearer $TOKEN" "{status_url}"\n\n'
-        f"# 3) WHEP — POST con SDP offer (genera offer.json con un cliente WebRTC)\n"
-        f'curl -sS -X POST "{whep_url}" \\\n'
-        f'  -H "Authorization: Bearer $TOKEN" \\\n'
-        f'  -H "Content-Type: application/json" \\\n'
-        f"  -d @offer.json"
-    )
     webrtc_block = {
         "enabled": camera.output.webrtc.enabled,
         "mode": camera.output.webrtc.mode,
         "whep_offer_url": whep_url,
-        "whep_method": "POST",
-        "whep_body": '{"sdp":"<offer SDP>","type":"offer"}',
-        "panel_url": f"{api_base}/",
-        "hint_panel": "Visor en este panel (modo WebRTC + Activar broadcast).",
-        "hint_external": (
-            "Desde fuera: túnel SSH al puerto API o port forwarding; "
-            "cabecera Authorization: Bearer <token del login>"
-        ),
+        "panel_url": panel_url,
         "status_url": status_url,
-        "curl_probe": curl_probe,
+        "human_steps": [
+            "El vídeo se ve aquí mismo: con broadcast activo debe aparecer el reproductor encima de este texto.",
+            "Si no hay imagen, espera 10–20 s y comprueba que pone «Ingesta OK» y que el búfer sube.",
+            f"Para abrir el panel desde otro móvil o PC: {panel_url}",
+            "No hace falta usar curl para ver el vídeo en el navegador.",
+        ],
+        "curl_check": (
+            f"# Solo para comprobar en terminal que la API responde:\n"
+            f'curl -sS -X POST "{login_url}" -H "Content-Type: application/json" '
+            f'-d \'{{"username":"admin","password":"TU_PASS"}}\'\n'
+            f"# Copia access_token de la respuesta y:\n"
+            f'curl -sS -H "Authorization: Bearer TOKEN" "{status_url}"'
+        ),
     }
 
     store = settings.camera_store_backend.value
@@ -539,21 +592,16 @@ def _build_camera_access_info(
         "relay": relay_block,
         "relay_preview": relay_preview,
         "webrtc": webrtc_block,
+        "panel_urls": {
+            "public": panel_urls.get("public_url") or api_base,
+            "access": panel_urls.get("access_url") or "",
+            "note": panel_urls.get("url_note") or "",
+        },
         "broadcast_status_url": f"{api_base}/api/v1/cameras/{camera_id}/broadcast/status",
     }
     if preview:
         out["preview"] = True
     return out
-
-
-def _access_info_context(request: Request, settings: AppSettings) -> tuple[str, str]:
-    host_header = (request.headers.get("host") or "").strip()
-    if not host_header:
-        host_header = f"127.0.0.1:{settings.edge_api_port}"
-    scheme = request.url.scheme or "http"
-    api_base = f"{scheme}://{host_header}".rstrip("/")
-    lan_ip = settings.ap_ip or "IP_LAN_DEL_EDGE"
-    return api_base, lan_ip
 
 
 @router.get("/cameras/{camera_id}/access-info")
@@ -568,12 +616,11 @@ async def camera_access_info(
     camera = await repo.get(camera_id)
     if not camera:
         raise HTTPException(status_code=404, detail="Cámara no encontrada")
-    api_base, lan_ip = _access_info_context(request, settings)
+    panel_urls = _resolve_panel_urls(request, settings)
     return _build_camera_access_info(
         camera,
         camera_id,
-        api_base=api_base,
-        lan_ip=lan_ip,
+        panel_urls=panel_urls,
         settings=settings,
         relay_manager=relay_manager,
     )
@@ -593,12 +640,11 @@ async def camera_access_info_preview(
     if not camera:
         raise HTTPException(status_code=404, detail="Cámara no encontrada")
     preview_cam = _camera_with_source_overrides(camera, body)
-    api_base, lan_ip = _access_info_context(request, settings)
+    panel_urls = _resolve_panel_urls(request, settings)
     return _build_camera_access_info(
         preview_cam,
         camera_id,
-        api_base=api_base,
-        lan_ip=lan_ip,
+        panel_urls=panel_urls,
         settings=settings,
         relay_manager=relay_manager,
         preview=True,

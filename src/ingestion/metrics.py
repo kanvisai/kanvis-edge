@@ -15,6 +15,7 @@ class IngestMetrics:
     connected: bool = False
     last_packet_at: float | None = None
     connected_since: float | None = None
+    last_error: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def on_connected(self) -> None:
@@ -35,10 +36,12 @@ class IngestMetrics:
             self.bytes_total += size
             self.last_packet_at = now
 
-    def on_error(self) -> None:
+    def on_error(self, message: str | None = None) -> None:
         with self._lock:
             self.errors_total += 1
             self.connected = False
+            if message:
+                self.last_error = message[:500]
 
     def snapshot(self) -> dict:
         now = time.monotonic()
@@ -58,4 +61,5 @@ class IngestMetrics:
                 "errors_total": self.errors_total,
                 "last_packet_idle_sec": round(idle_sec, 2) if idle_sec is not None else None,
                 "connected_uptime_sec": round(uptime, 2),
+                "last_error": self.last_error,
             }

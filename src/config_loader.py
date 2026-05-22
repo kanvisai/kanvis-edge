@@ -42,6 +42,14 @@ class AppSettings(BaseSettings):
     # API Gateway
     edge_api_host: str = Field(default="0.0.0.0", alias="EDGE_API_HOST")
     edge_api_port: int = Field(default=8000, alias="EDGE_API_PORT")
+    edge_panel_public_url: str = Field(
+        default="",
+        alias="EDGE_PANEL_PUBLIC_URL",
+        description=(
+            "URL pública del panel (ej. http://203.0.113.5:8000) para enlaces WebRTC/RTSP "
+            "en la UI; si vacío se infiere del Host o de la IP WAN"
+        ),
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # RTSP relay global (puerto por defecto si la cámara no define uno)
@@ -202,6 +210,7 @@ class AppSettings(BaseSettings):
 _YAML_ENV_MAP: dict[tuple[str, str], str] = {
     ("gateway", "edge_api_host"): "EDGE_API_HOST",
     ("gateway", "edge_api_port"): "EDGE_API_PORT",
+    ("gateway", "edge_panel_public_url"): "EDGE_PANEL_PUBLIC_URL",
     ("gateway", "log_level"): "LOG_LEVEL",
     ("buffer", "buffer_duration_seconds"): "BUFFER_DURATION_SECONDS",
     ("buffer", "default_playback_offset_sec"): "DEFAULT_PLAYBACK_OFFSET_SEC",

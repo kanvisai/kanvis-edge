@@ -494,6 +494,15 @@ function renderConnectionHints(el, info, mode) {
   if (info.preview) {
     html += `<p class="hint">Vista previa con los datos del formulario (sin guardar aún).</p>`;
   }
+  const pu = info.panel_urls || {};
+  if (pu.note) {
+    html += `<p class="hint">${escapeHtml(pu.note)}</p>`;
+  }
+  if (pu.access && pu.public && pu.access !== pu.public) {
+    html += `<p class="hint">Navegador: <code>${escapeHtml(pu.access)}</code> · Enlaces: <code>${escapeHtml(
+      pu.public
+    )}</code></p>`;
+  }
   html += `<p class="section-label">Datos de conexión</p>`;
   html += `<div class="conn-block"><strong>Origen cámara (RTSP)</strong><pre class="conn-pre">${escapeHtml(
     originRtsp
@@ -521,21 +530,47 @@ function renderConnectionHints(el, info, mode) {
     }
   } else {
     const w = info.webrtc || {};
-    html += `<div class="conn-block"><strong>WebRTC (visor WHEP)</strong><pre class="conn-pre">POST ${escapeHtml(
+    html += `<div class="conn-block"><strong>Cómo ver el vídeo (WebRTC)</strong><ol class="conn-steps">`;
+    const steps = w.human_steps?.length
+      ? w.human_steps
+      : [
+          "Activa broadcast: el reproductor de vídeo debe aparecer en esta misma tarjeta.",
+          "Si no hay imagen, espera unos segundos y revisa «Ingesta OK».",
+        ];
+    for (const s of steps) {
+      html += `<li>${escapeHtml(s)}</li>`;
+    }
+    html += `</ol>`;
+    if (w.panel_url) {
+      html += `<p><a class="conn-link" href="${escapeHtml(w.panel_url)}" target="_blank" rel="noopener">${escapeHtml(
+        w.panel_url
+      )}</a> <button type="button" class="btn-sm" data-copy-url="${escapeHtml(
+        w.panel_url
+      )}">Copiar enlace</button></p>`;
+    }
+    html += `</div>`;
+    html += `<details class="conn-advanced"><summary>Detalles técnicos (desarrolladores)</summary><pre class="conn-pre">POST ${escapeHtml(
       w.whep_offer_url || "—"
-    )}\nContent-Type: application/json\nBody: {"sdp":"&lt;offer&gt;","type":"offer"}\n\nVisor: ${escapeHtml(
-      w.panel_url || ""
     )}\nEstado: ${escapeHtml(w.status_url || "")}</pre>`;
-    if (w.curl_probe) {
-      html += `<p class="section-label">Probar en terminal (curl)</p><pre class="conn-pre conn-curl">${escapeHtml(
-        w.curl_probe
+    if (w.curl_check) {
+      html += `<p class="hint">Comprobar API en terminal (opcional):</p><pre class="conn-pre conn-curl">${escapeHtml(
+        w.curl_check
       )}</pre>`;
     }
-    html += `<p class="hint">${escapeHtml(w.hint_panel || "")} ${escapeHtml(
-      w.hint_external || ""
-    )}</p></div>`;
+    html += `</details></div>`;
   }
   el.innerHTML = html;
+  el.querySelectorAll("[data-copy-url]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const url = btn.getAttribute("data-copy-url");
+      try {
+        await navigator.clipboard.writeText(url);
+        toast("Enlace copiado");
+      } catch {
+        toast("No se pudo copiar", true);
+      }
+    });
+  });
 }
 
 function debounce(fn, ms = 350) {

@@ -14,7 +14,7 @@ from src.config_loader import AppSettings
 from src.discovery.repository import CameraRepository
 from src.ingestion.consumer import StreamConsumerManager
 from src.relay.manager import RelayManager
-from src.relay.worker import build_relay_urls
+from src.relay.worker import _mask_url, build_relay_urls
 from src.schedule.service import OperatingScheduleService, require_operating_now
 from src.testing.buffer_snapshot import capture_jpeg_from_buffer
 from src.testing.snapshot import SnapshotError, capture_jpeg_from_rtsp, local_listen_url
@@ -82,14 +82,40 @@ async def _start_broadcast_ingest(
 async def _wait_ingest_ready(
     camera_id: str,
     manager: StreamConsumerManager,
-    timeout_sec: float = 12.0,
-) -> bool:
+    timeout_sec: float = 20.0,
+) -> dict:
+    """Espera hilo de ingesta + RTSP conectado + primeros paquetes en búfer."""
     deadline = asyncio.get_running_loop().time() + timeout_sec
+    last_snap: dict = {}
+    span = 0.0
     while asyncio.get_running_loop().time() < deadline:
-        if manager.get_consumer(camera_id) and manager.get_buffer(camera_id):
-            return True
-        await asyncio.sleep(0.25)
-    return False
+        consumer = manager.get_consumer(camera_id)
+        buffer = manager.get_buffer(camera_id)
+        if consumer and buffer:
+            last_snap = consumer.metrics.snapshot()
+            span = buffer.span_seconds()
+            if last_snap.get("connected") and span >= 0.35:
+                return {
+                    "ready": True,
+                    "connected": True,
+                    "buffer_span_seconds": round(span, 2),
+                    "ingest": last_snap,
+                }
+        await asyncio.sleep(0.35)
+    consumer = manager.get_consumer(camera_id)
+    buffer = manager.get_buffer(camera_id)
+    if consumer:
+        last_snap = consumer.metrics.snapshot()
+    if buffer:
+        span = buffer.span_seconds()
+    thread_up = bool(consumer and buffer)
+    return {
+        "ready": thread_up and bool(last_snap.get("connected")),
+        "thread_started": thread_up,
+        "connected": bool(last_snap.get("connected")),
+        "buffer_span_seconds": round(span, 2),
+        "ingest": last_snap,
+    }
 
 
 async def _stop_broadcast_ingest(
@@ -235,14 +261,23 @@ async def broadcast_start(
     if not cam:
         raise HTTPException(status_code=404, detail="Cámara no encontrada")
     await _start_broadcast_ingest(camera_id, manager)
-    ingest_ready = await _wait_ingest_ready(camera_id, manager)
+    ingest_state = await _wait_ingest_ready(camera_id, manager)
     buf = manager.get_buffer(camera_id)
+    ingest_ok = ingest_state.get("connected") and (ingest_state.get("buffer_span_seconds") or 0) >= 0.35
+    try:
+        source_rtsp = _mask_url(cam.rtsp_url())
+    except Exception as exc:
+        source_rtsp = f"(error URL: {exc})"
     out: dict = {
         "broadcast": "started",
         "camera_id": camera_id,
         "mode": mode,
-        "ingest_ready": ingest_ready,
-        "buffer_span_seconds": round(buf.span_seconds(), 2) if buf else 0,
+        "ingest_ready": ingest_ok,
+        "ingest_connected": ingest_state.get("connected"),
+        "ingest_thread_started": ingest_state.get("thread_started"),
+        "buffer_span_seconds": ingest_state.get("buffer_span_seconds", 0),
+        "source_rtsp_masked": source_rtsp,
+        "ingest_last_error": (ingest_state.get("ingest") or {}).get("last_error"),
     }
     if mode == "webrtc":
         if not cam.output.webrtc.enabled:
@@ -250,11 +285,13 @@ async def broadcast_start(
                 status_code=400,
                 detail="Configura modo WebRTC antes de activar broadcast",
             )
-        if not ingest_ready:
+        if not ingest_ok:
+            err = out.get("ingest_last_error") or "sin conexión RTSP a la cámara"
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "No arrancó la ingesta RTSP; revisa IP, canal, marca y credenciales"
+                    f"Ingesta RTSP no recibe vídeo (búfer {out['buffer_span_seconds']}s). "
+                    f"La cámara es la fuente: prueba «Probar conexión» arriba. Último error: {err}"
                 ),
             )
         out["hint"] = "Búfer en marcha; conecta WebRTC o usa snapshot/buffer para prueba"
@@ -265,6 +302,15 @@ async def broadcast_start(
             detail="Configura modo RTSP antes de activar broadcast",
         )
     await relay_manager.sync_from_repository()
+    if not ingest_ok:
+        err = out.get("ingest_last_error") or "sin conexión RTSP"
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Ingesta RTSP sin vídeo (búfer {out['buffer_span_seconds']}s). "
+                f"Revisa IP/canal/marca. Último error: {err}"
+            ),
+        )
     if not relay_manager.start_camera(camera_id):
         raise HTTPException(
             status_code=503,

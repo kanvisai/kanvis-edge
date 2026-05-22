@@ -129,15 +129,15 @@ class StreamConsumer:
                     self._push_live(raw)
 
             except av.AVError as exc:
-                self.metrics.on_error()
+                self.metrics.on_error(str(exc))
                 logger.warning(
                     "RTSP error %s: %s — reintento en %.1fs",
                     self._camera.camera_id,
                     exc,
                     delay,
                 )
-            except Exception:
-                self.metrics.on_error()
+            except Exception as exc:
+                self.metrics.on_error(str(exc))
                 logger.exception("Error inesperado en %s", self._camera.camera_id)
             finally:
                 self.metrics.on_disconnected()
