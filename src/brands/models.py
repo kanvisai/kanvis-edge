@@ -14,11 +14,17 @@ class BrandProtocols(BaseModel):
     rtsp: RtspProtocolSpec
 
 
+class BrandChannelHint(BaseModel):
+    id: str
+    label: str = ""
+
+
 class BrandProfile(BaseModel):
     brand: str
     version: str
     models: list[str] = Field(default_factory=list)
     protocols: BrandProtocols
+    default_channels: list[BrandChannelHint] = Field(default_factory=list)
 
     @property
     def slug(self) -> str:

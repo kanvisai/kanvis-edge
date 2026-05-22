@@ -6,11 +6,21 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field, SecretStr
 
 from src.api.dispatcher import VideoDispatcher
 from src.config_loader import AppSettings, get_settings
-from src.discovery.models import CameraCreatePayload, CameraRecord
+from src.discovery.models import (
+    CameraBufferSettings,
+    CameraCreatePayload,
+    CameraOutput,
+    CameraRecord,
+    CameraRelayOutput,
+    CameraSource,
+    CameraWebRTCOutput,
+)
+from src.testing.snapshot import SnapshotError, capture_jpeg_from_rtsp
 from src.discovery.rtsp_urls import default_gateway_path
 from src.discovery.repository import CameraRepository
 from src.ingestion.consumer import StreamConsumerManager
@@ -220,6 +230,11 @@ async def list_brands(
                         "time_format": profile.protocols.rtsp.time_format,
                         "requires_utc": profile.protocols.rtsp.requires_utc,
                     },
+                    "default_channels": [
+                        {"id": ch.id, "label": ch.label}
+                        for ch in profile.default_channels
+                    ]
+                    or [{"id": "101", "label": "Principal"}, {"id": "102", "label": "Sub"}],
                 }
             )
         except (FileNotFoundError, ValueError):
@@ -268,6 +283,67 @@ async def camera_rtsp_urls(
         "urls_masked": masked,
         "gateway_path": default_gateway_path(camera, settings),
     }
+
+
+class CameraProbeRequest(BaseModel):
+    """Prueba RTSP sin guardar cámara (vista previa JPEG)."""
+
+    host: str
+    port: int = Field(default=554, ge=1, le=65535)
+    username: str = ""
+    password: str = ""
+    brand: str = ""
+    channel: str = "101"
+    transport: str = "tcp"
+
+
+@router.post("/cameras/probe")
+async def probe_camera_rtsp(
+    body: CameraProbeRequest,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> Response:
+    """Captura un frame JPEG desde RTSP con los datos del formulario (sin inventario previo)."""
+    host = body.host.strip()
+    if not host:
+        raise HTTPException(status_code=400, detail="host requerido")
+    record = CameraRecord(
+        camera_id="probe",
+        label="probe",
+        enabled=True,
+        source=CameraSource(
+            host=host,
+            port=body.port,
+            username=body.username,
+            password=SecretStr(body.password),
+            brand=body.brand.strip(),
+            channel=body.channel.strip() or "101",
+            transport=body.transport or "tcp",
+        ),
+        output=CameraOutput(),
+        buffer=CameraBufferSettings(),
+    )
+    try:
+        url = record.rtsp_url(settings=settings)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    tout = settings.snapshot_timeout_sec
+    try:
+        jpeg = await capture_jpeg_from_rtsp(
+            url,
+            ffmpeg_path=settings.ffmpeg_path,
+            transport=record.source.transport,
+            timeout_sec=tout,
+        )
+    except SnapshotError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={
+            "X-Kanvis-Rtsp-Url": _mask_url(url),
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/cameras")

@@ -215,6 +215,11 @@ class WanSyncService:
             if force_cloud or always or ip_changed or not self._state.last_cloud_report_ok:
                 try:
                     await self.report_to_cloud(public_ip)
+                except ValueError as exc:
+                    self._state.last_cloud_report_ok = False
+                    self._state.last_cloud_report_error = str(exc)
+                    # 401 = credenciales; no hace falta traceback completo en cada arranque
+                    logger.warning("Reporte nube: %s", exc)
                 except Exception as exc:
                     self._state.last_cloud_report_ok = False
                     self._state.last_cloud_report_error = str(exc)

@@ -2,6 +2,10 @@
   "brand": "Annke",
   "version": "1.0.0",
   "models": [],
+  "default_channels": [
+    { "id": "101", "label": "Principal (main)" },
+    { "id": "102", "label": "Substream" }
+  ],
   "protocols": {
     "rtsp": {
       "stream_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/Streaming/channels/{{channel}}",

@@ -1,11 +1,17 @@
 /**
- * Kanvis Edge — panel de configuración (Fase 4)
+ * Kanvis Edge — panel móvil (cámaras por IP + canales)
  */
 
 const TOKEN_KEY = "kanvis_token";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+let brandsCache = [];
+let camerasCache = [];
+/** Borradores por IP aún no guardados en API */
+let draftDevices = [];
+let activeDeviceKey = null;
 
 function getToken() {
   return sessionStorage.getItem(TOKEN_KEY) || "";
@@ -68,13 +74,598 @@ async function checkSession() {
 }
 
 function logout() {
-  if (window.KanvisWebRtcViewer?.isConnected?.()) {
-    window.KanvisWebRtcViewer.disconnect(api).catch(() => {});
+  const id = window.KanvisWebRtcViewer?.getActiveCameraId?.();
+  if (id) {
+    window.KanvisWebRtcViewer.disconnect(api, id).catch(() => {});
   }
   setToken("");
   showApp(false);
 }
 
+function hostKey(host) {
+  return (host || "").trim().toLowerCase();
+}
+
+function hostToSlug(host) {
+  return hostKey(host).replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
+}
+
+function makeCameraId(host, channel) {
+  const ch = String(channel || "101").replace(/\D/g, "") || "101";
+  return `cam-${hostToSlug(host)}-ch${ch}`;
+}
+
+function groupCamerasByHost(cameras) {
+  const map = new Map();
+  for (const cam of cameras) {
+    const host = cam.source?.host || cam.ip_address || "";
+    if (!host) continue;
+    const key = hostKey(host);
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        host,
+        brand: cam.source?.brand || "",
+        port: cam.source?.port || 554,
+        username: cam.source?.username || "",
+        password: "",
+        channels: [],
+      });
+    }
+    const dev = map.get(key);
+    if (cam.source?.brand && !dev.brand) dev.brand = cam.source.brand;
+    dev.channels.push({
+      channel: cam.source?.channel || "101",
+      camera: cam,
+      saved: true,
+    });
+  }
+  for (const dev of map.values()) {
+    dev.channels.sort((a, b) => String(a.channel).localeCompare(String(b.channel)));
+  }
+  return map;
+}
+
+function getAllDevices() {
+  const saved = groupCamerasByHost(camerasCache);
+  const list = [...draftDevices];
+  for (const [key, dev] of saved) {
+    const draft = list.find((d) => d.key === key);
+    if (draft) {
+      for (const ch of dev.channels) {
+        if (!draft.channels.some((c) => c.channel === ch.channel)) {
+          draft.channels.push({ ...ch });
+        }
+      }
+      draft.brand = draft.brand || dev.brand;
+    } else {
+      list.push({
+        ...dev,
+        fromApi: true,
+        probeChannel: dev.probeChannel || "101",
+        broadcastMode: "rtsp",
+        path: "/Streaming/Channels/101",
+      });
+    }
+  }
+  return list;
+}
+
+function brandOptionsHtml(selected = "") {
+  let html = '<option value="">— Marca / plantilla RTSP —</option>';
+  for (const b of brandsCache) {
+    const sel = b.slug === selected ? " selected" : "";
+    html += `<option value="${b.slug}"${sel}>${b.brand}</option>`;
+  }
+  return html;
+}
+
+function defaultChannelsForBrand(slug) {
+  const b = brandsCache.find((x) => x.slug === slug);
+  if (b?.default_channels?.length) {
+    return b.default_channels.map((c) => ({ channel: c.id, label: c.label }));
+  }
+  return [{ channel: "101", label: "Principal" }, { channel: "102", label: "Sub" }];
+}
+
+function buildCameraPayload(device, channel, label) {
+  const id = makeCameraId(device.host, channel);
+  const relayOn = device.broadcastMode !== "webrtc";
+  const webrtcOn = device.broadcastMode === "webrtc";
+  return {
+    camera_id: id,
+    label: label || `${device.host} ch${channel}`,
+    enabled: true,
+    source: {
+      host: device.host.trim(),
+      port: parseInt(device.port, 10) || 554,
+      username: device.username || "",
+      password: device.password || "",
+      brand: device.brand || "",
+      channel: String(channel),
+      path: device.brand ? "" : device.path || "/Streaming/Channels/101",
+      fps: 20,
+      width: 1280,
+      height: 720,
+      transport: "tcp",
+    },
+    output: {
+      protocol: relayOn || webrtcOn ? (webrtcOn ? "webrtc" : "rtsp") : "none",
+      gateway: { enabled: false, access_mode: "gateway", path: id },
+      relay: {
+        enabled: relayOn,
+        mode: "listen",
+        push_url: "",
+        listen_port: 8554,
+        path_suffix: id,
+        iframe_interval_sec: 3,
+        force_transcode_gop: false,
+      },
+      webrtc: {
+        enabled: webrtcOn,
+        mode: "whep",
+        rewind_offset_sec: 3,
+      },
+    },
+    buffer: {
+      duration_seconds: 60,
+      default_playback_offset_sec: 6,
+      event_pre_seconds: 6,
+      event_post_seconds: 24,
+    },
+  };
+}
+
+async function probeDevice(device, channel) {
+  const body = {
+    host: device.host.trim(),
+    port: parseInt(device.port, 10) || 554,
+    username: device.username || "",
+    password: device.password || "",
+    brand: device.brand || "",
+    channel: String(channel || device.probeChannel || "101"),
+    transport: "tcp",
+  };
+  const blob = await api("/api/v1/cameras/probe", { method: "POST", json: body });
+  return URL.createObjectURL(blob);
+}
+
+async function loadBrands() {
+  try {
+    const data = await api("/api/v1/brands");
+    brandsCache = data.brands || [];
+  } catch (err) {
+    console.warn("brands", err);
+  }
+}
+
+async function loadCameras() {
+  try {
+    camerasCache = await api("/api/v1/cameras");
+    renderDevices();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function selectDevice(key) {
+  activeDeviceKey = key;
+  renderDevices();
+}
+
+function addDraftDevice() {
+  const key = `draft-${Date.now()}`;
+  draftDevices.push({
+    key,
+    host: "",
+    port: 554,
+    username: "",
+    password: "",
+    brand: "",
+    path: "/Streaming/Channels/101",
+    probeChannel: "101",
+    broadcastMode: "rtsp",
+    channels: [{ channel: "101", label: "Principal", saved: false, camera: null }],
+    fromApi: false,
+  });
+  activeDeviceKey = key;
+  renderDevices();
+}
+
+function renderDeviceNav(devices) {
+  const nav = $("#device-nav");
+  nav.innerHTML = "";
+  if (!devices.length) {
+    $("#cameras-empty")?.classList.remove("hidden");
+    return;
+  }
+  $("#cameras-empty")?.classList.add("hidden");
+  if (!activeDeviceKey || !devices.some((d) => d.key === activeDeviceKey)) {
+    activeDeviceKey = devices[0].key;
+  }
+  for (const dev of devices) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `device-tab${dev.key === activeDeviceKey ? " active" : ""}`;
+    btn.textContent = dev.host?.trim() || "Nueva IP";
+    btn.addEventListener("click", () => selectDevice(dev.key));
+    nav.appendChild(btn);
+  }
+}
+
+function renderChannelCard(device, chState, panel) {
+  const ch = chState.channel;
+  const cam = chState.camera;
+  const cameraId = cam?.camera_id || makeCameraId(device.host, ch);
+  const saved = chState.saved && !!cam;
+  const relayOn = cam?.output?.relay?.enabled;
+  const webrtcOn = cam?.output?.webrtc?.enabled;
+  const broadcastMode = webrtcOn ? "webrtc" : "rtsp";
+
+  const card = document.createElement("div");
+  card.className = "channel-card";
+  card.dataset.channel = ch;
+
+  card.innerHTML = `
+    <header>
+      <strong>Canal ${ch}</strong>
+      <span class="ch-status badge muted">—</span>
+    </header>
+    ${saved ? "" : `
+      <label>Nº canal</label>
+      <input type="text" class="ch-input" value="${ch}" inputmode="numeric" />
+    `}
+    <div class="channel-actions">
+      ${saved ? `
+        <button type="button" class="btn-sm secondary" data-broadcast-rtsp="${cameraId}">RTSP ${relayOn ? "ON" : "OFF"}</button>
+        <button type="button" class="btn-sm secondary" data-broadcast-webrtc="${cameraId}">WebRTC</button>
+        <button type="button" class="btn-sm" data-save-ch="${cameraId}" style="display:none">Guardar</button>
+        <button type="button" class="btn-sm danger" data-del-ch="${cameraId}">Quitar</button>
+      ` : `
+        <button type="button" class="btn-sm" data-save-ch="">Guardar canal</button>
+        <button type="button" class="btn-sm danger" data-remove-draft-ch="">Quitar</button>
+      `}
+    </div>
+    <div class="broadcast-panel hidden">
+      <p class="hint">Modo: <span class="bc-mode-label">—</span></p>
+      <div class="channel-actions">
+        <button type="button" class="btn-sm" data-bc-start="${cameraId}">Iniciar broadcast</button>
+        <button type="button" class="btn-sm secondary" data-bc-stop="${cameraId}">Detener</button>
+      </div>
+      <video class="channel-video hidden" playsinline muted autoplay></video>
+    </div>
+  `;
+
+  if (!saved) {
+    card.querySelector(".ch-input")?.addEventListener("change", (e) => {
+      chState.channel = e.target.value.trim() || ch;
+    });
+    card.querySelector("[data-save-ch]")?.addEventListener("click", () => saveChannel(device, chState, card));
+    card.querySelector("[data-remove-draft-ch]")?.addEventListener("click", () => {
+      device.channels = device.channels.filter((c) => c !== chState);
+      if (device.channels.length === 0 && !device.fromApi) {
+        draftDevices = draftDevices.filter((d) => d.key !== device.key);
+        activeDeviceKey = null;
+      }
+      renderDevices();
+    });
+  } else {
+    const bcPanel = card.querySelector(".broadcast-panel");
+    if (relayOn || webrtcOn) {
+      bcPanel?.classList.remove("hidden");
+      card.querySelector(".bc-mode-label").textContent =
+        webrtcOn ? "WebRTC (WHEP)" : "RTSP rebroadcast";
+    }
+    card.querySelector(`[data-broadcast-rtsp]`)?.addEventListener("click", async () => {
+      await setBroadcastMode(device, cam, "rtsp", card);
+    });
+    card.querySelector(`[data-broadcast-webrtc]`)?.addEventListener("click", async () => {
+      await setBroadcastMode(device, cam, "webrtc", card);
+    });
+    card.querySelector(`[data-del-ch]`)?.addEventListener("click", () => deleteCamera(cameraId));
+    card.querySelector(`[data-bc-start]`)?.addEventListener("click", () => startBroadcast(cameraId, broadcastMode, card));
+    card.querySelector(`[data-bc-stop]`)?.addEventListener("click", () => stopBroadcast(cameraId, card));
+    refreshChannelStatus(cameraId, card);
+  }
+
+  panel.appendChild(card);
+}
+
+function renderDevicePanel(device) {
+  const panel = document.createElement("div");
+  panel.className = "device-card";
+  panel.dataset.deviceKey = device.key;
+
+  panel.innerHTML = `
+    <h2>
+      <span class="ip-badge">${device.host?.trim() || "Nueva cámara"}</span>
+      ${device.fromApi ? "" : '<button type="button" class="btn-sm danger" data-remove-device="">Eliminar</button>'}
+    </h2>
+    <div class="field-grid">
+      <div class="span2">
+        <label>Marca</label>
+        <select class="dev-brand">${brandOptionsHtml(device.brand)}</select>
+      </div>
+      <div class="span2">
+        <label>IP / host</label>
+        <input class="dev-host" value="${device.host || ""}" placeholder="192.168.1.64" autocomplete="off" />
+      </div>
+      <div>
+        <label>Puerto RTSP</label>
+        <input class="dev-port" type="number" value="${device.port || 554}" />
+      </div>
+      <div>
+        <label>Canal (prueba)</label>
+        <input class="dev-probe-ch" value="${device.probeChannel || "101"}" inputmode="numeric" />
+      </div>
+      <div>
+        <label>Usuario</label>
+        <input class="dev-user" value="${device.username || ""}" autocomplete="username" />
+      </div>
+      <div>
+        <label>Contraseña</label>
+        <input class="dev-pass" type="password" value="${device.password || ""}" autocomplete="current-password" />
+      </div>
+    </div>
+    <div class="probe-box">
+      <div class="probe-preview">
+        <p class="probe-placeholder">Pulsa «Probar conexión» para ver un frame</p>
+      </div>
+      <button type="button" class="btn-block secondary" data-probe="">Probar conexión</button>
+      <p class="probe-msg hint"></p>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn-sm secondary" data-add-channel="">+ Canal</button>
+    </div>
+    <div class="channels-root"></div>
+  `;
+
+  const bind = (sel, fn) => {
+    const el = panel.querySelector(sel);
+    if (el) el.addEventListener("input", fn);
+    if (el) el.addEventListener("change", fn);
+  };
+
+  bind(".dev-host", (e) => {
+    device.host = e.target.value;
+    renderDevices();
+  });
+  bind(".dev-port", (e) => {
+    device.port = e.target.value;
+  });
+  bind(".dev-user", (e) => {
+    device.username = e.target.value;
+  });
+  bind(".dev-pass", (e) => {
+    device.password = e.target.value;
+  });
+  bind(".dev-probe-ch", (e) => {
+    device.probeChannel = e.target.value;
+  });
+  panel.querySelector(".dev-brand")?.addEventListener("change", (e) => {
+    device.brand = e.target.value;
+    if (!device.channels.length) {
+      device.channels = defaultChannelsForBrand(device.brand).map((c) => ({
+        channel: c.channel,
+        label: c.label,
+        saved: false,
+        camera: null,
+      }));
+    }
+    renderDevices();
+  });
+
+  panel.querySelector("[data-probe]")?.addEventListener("click", async () => {
+    const msg = panel.querySelector(".probe-msg");
+    const preview = panel.querySelector(".probe-preview");
+    if (!device.host?.trim()) {
+      return toast("Indica la IP", true);
+    }
+    msg.textContent = "Capturando frame…";
+    try {
+      const url = await probeDevice(device, device.probeChannel);
+      preview.innerHTML = `<img src="${url}" alt="Vista previa" />`;
+      msg.textContent = "Cámara detectada";
+      const oldKey = device.key;
+      device.key = hostKey(device.host);
+      if (oldKey !== device.key) {
+        const idx = draftDevices.findIndex((d) => d.key === oldKey);
+        if (idx >= 0) draftDevices[idx].key = device.key;
+        activeDeviceKey = device.key;
+      }
+    } catch (err) {
+      preview.innerHTML = '<p class="probe-placeholder">Sin imagen</p>';
+      msg.textContent = err.message;
+      toast(err.message, true);
+    }
+  });
+
+  panel.querySelector("[data-add-channel]")?.addEventListener("click", () => {
+    const existing = new Set(device.channels.map((c) => c.channel));
+    let next = "101";
+    for (const n of ["101", "102", "201", "202", "1", "2"]) {
+      if (!existing.has(n)) {
+        next = n;
+        break;
+      }
+    }
+    device.channels.push({ channel: next, saved: false, camera: null });
+    renderDevices();
+  });
+
+  panel.querySelector("[data-remove-device]")?.addEventListener("click", () => {
+    draftDevices = draftDevices.filter((d) => d.key !== device.key);
+    if (activeDeviceKey === device.key) activeDeviceKey = null;
+    renderDevices();
+  });
+
+  const chRoot = panel.querySelector(".channels-root");
+  for (const chState of device.channels) {
+    renderChannelCard(device, chState, chRoot);
+  }
+
+  return panel;
+}
+
+function renderDevices() {
+  const devices = getAllDevices();
+  renderDeviceNav(devices);
+  const panels = $("#device-panels");
+  panels.innerHTML = "";
+  if (!devices.length) {
+    $("#cameras-empty")?.classList.remove("hidden");
+    return;
+  }
+  $("#cameras-empty")?.classList.add("hidden");
+  const active = devices.find((d) => d.key === activeDeviceKey) || devices[0];
+  panels.appendChild(renderDevicePanel(active));
+}
+
+async function saveChannel(device, chState, card) {
+  if (!device.host?.trim()) return toast("Indica la IP", true);
+  const chInput = card.querySelector(".ch-input");
+  const channel = (chInput?.value || chState.channel || "101").trim();
+  const cameraId = makeCameraId(device.host, channel);
+  const payload = buildCameraPayload(device, channel, `${device.host} ch${channel}`);
+  payload.camera_id = cameraId;
+  try {
+    const existing = camerasCache.find((c) => c.camera_id === cameraId);
+    if (existing) {
+      await api(`/api/v1/cameras/${cameraId}`, { method: "PUT", json: payload });
+      toast(`Canal ${channel} actualizado`);
+    } else {
+      await api("/api/v1/cameras", { method: "POST", json: payload });
+      toast(`Canal ${channel} guardado`);
+    }
+    draftDevices = draftDevices.filter((d) => d.key !== device.key || device.fromApi);
+    device.key = hostKey(device.host);
+    device.fromApi = true;
+    await loadCameras();
+    activeDeviceKey = device.key;
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function setBroadcastMode(device, cam, mode, card) {
+  const id = cam.camera_id;
+  const payload = buildCameraPayload(
+    {
+      host: cam.source.host,
+      port: cam.source.port,
+      username: cam.source.username,
+      password: cam.source.password || "",
+      brand: cam.source.brand,
+      broadcastMode: mode,
+    },
+    cam.source.channel,
+    cam.label
+  );
+  payload.camera_id = id;
+  try {
+    await api(`/api/v1/cameras/${id}`, { method: "PUT", json: payload });
+    toast(mode === "webrtc" ? "Modo WebRTC" : "Modo RTSP relay");
+    await loadCameras();
+    const bcPanel = card.querySelector(".broadcast-panel");
+    bcPanel?.classList.remove("hidden");
+    card.querySelector(".bc-mode-label").textContent =
+      mode === "webrtc" ? "WebRTC (WHEP)" : "RTSP rebroadcast";
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function refreshChannelStatus(cameraId, card) {
+  const badge = card.querySelector(".ch-status");
+  try {
+    const st = await api(`/api/v1/cameras/${cameraId}/status`);
+    const ing = st.ingest?.connected;
+    const relay = st.relay?.running;
+    const rtc = st.webrtc?.session?.connection_state === "connected";
+    let html = ing
+      ? '<span class="badge ok">Vídeo OK</span>'
+      : '<span class="badge warn">Sin vídeo</span>';
+    if (relay) html += ' <span class="badge ok">RTSP ON</span>';
+    if (rtc) html += ' <span class="badge ok">WebRTC</span>';
+    badge.innerHTML = html;
+  } catch {
+    badge.innerHTML = '<span class="badge muted">—</span>';
+  }
+}
+
+async function startBroadcast(cameraId, mode, card) {
+  try {
+    if (mode === "webrtc") {
+      const video = card.querySelector("video");
+      await KanvisWebRtcViewer.connect(cameraId, api, {
+        video,
+        onState: (state) => {
+          if (state === "connected") toast("WebRTC conectado");
+        },
+      });
+      card.querySelector(".broadcast-panel")?.classList.remove("hidden");
+      toast("WebRTC iniciado");
+    } else {
+      await api(`/api/v1/cameras/${cameraId}/broadcast/start`, { method: "POST" });
+      toast("Broadcast RTSP iniciado");
+    }
+    await refreshChannelStatus(cameraId, card);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function stopBroadcast(cameraId, card) {
+  try {
+    if (KanvisWebRtcViewer.getActiveCameraId() === cameraId) {
+      await KanvisWebRtcViewer.disconnect(api, cameraId);
+      const video = card.querySelector("video");
+      if (video) {
+        video.srcObject = null;
+        video.classList.add("hidden");
+      }
+    } else {
+      await api(`/api/v1/cameras/${cameraId}/broadcast/stop`, { method: "POST" });
+    }
+    toast("Broadcast detenido");
+    await refreshChannelStatus(cameraId, card);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function deleteCamera(id) {
+  if (!confirm(`¿Eliminar canal ${id}?`)) return;
+  try {
+    if (KanvisWebRtcViewer.getActiveCameraId() === id) {
+      await KanvisWebRtcViewer.disconnect(api, id);
+    }
+    await api(`/api/v1/cameras/${id}`, { method: "DELETE" });
+    toast("Canal eliminado");
+    await loadCameras();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+/* —— Navegación inferior —— */
+$$(".bottom-nav button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    $$(".bottom-nav button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    const tab = btn.dataset.tab;
+    $$(".tab-panel").forEach((p) => p.classList.toggle("hidden", p.id !== `tab-${tab}`));
+    if (tab === "cameras") loadCameras();
+    if (tab === "system") {
+      loadSystem();
+      loadOperatingSchedule();
+    }
+  });
+});
+
+$("#btn-add-device")?.addEventListener("click", addDraftDevice);
+
+/* —— Login —— */
 $("#login-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const user = $("#login-user").value.trim();
@@ -102,446 +693,7 @@ $("#login-form")?.addEventListener("submit", async (e) => {
 
 $("#btn-logout")?.addEventListener("click", logout);
 
-$$(".tabs button").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    $$(".tabs button").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    const tab = btn.dataset.tab;
-    $$(".tab-panel").forEach((p) => p.classList.toggle("hidden", p.id !== `tab-${tab}`));
-    if (tab === "cameras") loadCameras();
-    if (tab === "system") {
-      loadSystem();
-      loadOperatingSchedule();
-    }
-  });
-});
-
-let camerasCache = [];
-let brandsCache = [];
-
-async function loadBrands() {
-  try {
-    const data = await api("/api/v1/brands");
-    brandsCache = data.brands || [];
-    const sel = $("#cam-brand");
-    if (!sel) return;
-    const current = sel.value;
-    sel.innerHTML = '<option value="">— Manual (ruta RTSP propia) —</option>';
-    for (const b of brandsCache) {
-      const opt = document.createElement("option");
-      opt.value = b.slug;
-      opt.textContent = `${b.brand} (${b.slug})`;
-      opt.dataset.streamTemplate = b.rtsp?.stream_template || "";
-      sel.appendChild(opt);
-    }
-    if (current) sel.value = current;
-    updateBrandUi();
-  } catch (err) {
-    console.warn("brands", err);
-  }
-}
-
-function renderUrlPreview() {
-  const sel = $("#cam-brand");
-  const slug = sel?.value || "";
-  const preview = $("#cam-url-preview");
-  if (!preview) return;
-  const host = $("#cam-host")?.value?.trim();
-  const port = $("#cam-port")?.value || "554";
-  const channel = $("#cam-channel")?.value?.trim() || "101";
-  const user = encodeURIComponent($("#cam-user")?.value || "");
-  const pass = encodeURIComponent($("#cam-pass")?.value || "");
-  if (!slug) {
-    const path = $("#cam-path")?.value?.trim() || "/Streaming/Channels/101";
-    const p = path.startsWith("/") ? path : `/${path}`;
-    preview.value = host
-      ? `rtsp://${user ? `${user}:${pass}@` : ""}${host}:${port}${p}`
-      : "";
-    return;
-  }
-  const item = brandsCache.find((b) => b.slug === slug);
-  let tpl = item?.rtsp?.stream_template || sel.selectedOptions[0]?.dataset.streamTemplate || "";
-  tpl = tpl
-    .replace(/\{\{user\}\}/g, user)
-    .replace(/\{\{password\}\}/g, pass)
-    .replace(/\{\{host\}\}/g, host || "{{host}}")
-    .replace(/\{\{port\}\}/g, port)
-    .replace(/\{\{channel\}\}/g, channel);
-  preview.value = tpl;
-}
-
-function updateBrandUi() {
-  const slug = $("#cam-brand")?.value || "";
-  const manual = !slug;
-  $("#cam-path")?.toggleAttribute("disabled", !manual);
-  $("#cam-path-label")?.classList.toggle("muted", !manual);
-  const hint = $("#brand-hint");
-  if (hint) {
-    hint.textContent = manual
-      ? "Sin marca: indica la ruta RTSP completa como en el manual del equipo."
-      : "Con marca: el edge y el gateway usan la plantilla del fabricante (vivo y playback).";
-  }
-  renderUrlPreview();
-}
-
-["cam-brand", "cam-host", "cam-port", "cam-user", "cam-pass", "cam-channel", "cam-path"].forEach(
-  (id) => {
-    document.getElementById(id)?.addEventListener("input", renderUrlPreview);
-    document.getElementById(id)?.addEventListener("change", renderUrlPreview);
-  }
-);
-$("#cam-brand")?.addEventListener("change", updateBrandUi);
-
-async function loadCameras() {
-  const list = $("#camera-list");
-  list.innerHTML = "<p>Cargando…</p>";
-  try {
-    const schedHint = await api("/api/v1/operating-schedule").catch(() => null);
-    camerasCache = await api("/api/v1/cameras");
-    if (!camerasCache.length) {
-      list.innerHTML = "<p>No hay cámaras. Añade una abajo.</p>";
-      return;
-    }
-    list.innerHTML = "";
-    for (const cam of camerasCache) {
-      const card = document.createElement("div");
-      card.className = "camera-card";
-      const id = cam.camera_id;
-      let statusHtml = "";
-      try {
-        const st = await api(`/api/v1/cameras/${id}/status`);
-        const ing = st.ingest || {};
-        const conn = ing.connected
-          ? '<span class="badge ok">Conectada</span>'
-          : '<span class="badge warn">Sin vídeo</span>';
-        statusHtml = `${conn} Búfer: ${st.buffer_span_seconds || 0}s / ${st.buffer_max_duration_seconds || 60}s`;
-        if (st.relay?.running) statusHtml += ' <span class="badge ok">Relay ON</span>';
-        if (st.webrtc?.session?.connection_state === "connected") {
-          statusHtml += ' <span class="badge ok">WebRTC</span>';
-        }
-      } catch {
-        if (schedHint?.status?.enabled && !schedHint.status.is_active_now) {
-          statusHtml = '<span class="badge warn">Fuera de horario</span>';
-        } else {
-          statusHtml = '<span class="badge err">Inactiva</span>';
-        }
-      }
-      card.innerHTML = `
-        <h3>${cam.label || id}</h3>
-        <div>${statusHtml}</div>
-        <div style="color:var(--muted);font-size:0.85rem">${cam.source?.brand ? cam.source.brand + " · " : ""}${cam.source?.host || cam.ip_address}:${cam.source?.port || 554} · ch ${cam.source?.channel || "—"}</div>
-        <div class="actions">
-          <button type="button" data-test="${id}">Probar</button>
-          <button type="button" class="secondary" data-edit="${id}">Editar</button>
-          <button type="button" class="danger" data-del="${id}">Eliminar</button>
-        </div>
-      `;
-      list.appendChild(card);
-    }
-    list.querySelectorAll("[data-test]").forEach((b) =>
-      b.addEventListener("click", () => openTestPanel(b.dataset.test))
-    );
-    list.querySelectorAll("[data-edit]").forEach((b) =>
-      b.addEventListener("click", () => fillForm(camerasCache.find((c) => c.camera_id === b.dataset.edit)))
-    );
-    list.querySelectorAll("[data-del]").forEach((b) =>
-      b.addEventListener("click", () => deleteCamera(b.dataset.del))
-    );
-  } catch (err) {
-    list.innerHTML = `<p class="err">${err.message}</p>`;
-  }
-}
-
-function fillForm(cam) {
-  if (!cam) return clearForm();
-  $("#cam-id").value = cam.camera_id;
-  $("#cam-id").disabled = true;
-  $("#cam-label").value = cam.label || "";
-  $("#cam-enabled").checked = cam.enabled !== false;
-  const s = cam.source || cam;
-  $("#cam-host").value = s.host || s.ip_address || "";
-  $("#cam-port").value = s.port || s.rtsp_port || 554;
-  $("#cam-user").value = s.username || "";
-  $("#cam-pass").value = s.password || "";
-  $("#cam-brand").value = s.brand || "";
-  $("#cam-model").value = s.model || "";
-  $("#cam-channel").value = s.channel || "101";
-  $("#cam-path").value = s.path || s.rtsp_path || "/Streaming/Channels/101";
-  $("#cam-fps").value = s.fps || 20;
-  updateBrandUi();
-  const g = cam.output?.gateway || {};
-  $("#gateway-enabled").checked = !!g.enabled;
-  $("#gateway-path").value = g.path || cam.camera_id;
-  $("#gateway-access").value = g.access_mode || "gateway";
-  const r = cam.output?.relay || {};
-  $("#relay-enabled").checked = !!r.enabled;
-  $("#relay-port").value = r.listen_port || 8554;
-  $("#relay-path").value = r.path_suffix || cam.camera_id;
-  $("#relay-mode").value = r.mode || "listen";
-  $("#relay-push").value = r.push_url || "";
-  const w = cam.output?.webrtc || {};
-  $("#webrtc-enabled").checked = !!w.enabled;
-  $("#webrtc-mode").value = w.mode || "whep";
-  const b = cam.buffer || {};
-  $("#buf-duration").value = b.duration_seconds ?? 60;
-  $("#buf-offset").value = b.default_playback_offset_sec ?? 6;
-  $("#form-title").textContent = "Editar cámara";
-}
-
-function clearForm() {
-  $("#camera-form").reset();
-  $("#cam-id").disabled = false;
-  $("#form-title").textContent = "Añadir cámara";
-}
-
-$("#btn-clear-form")?.addEventListener("click", clearForm);
-
-$("#camera-form")?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const id = $("#cam-id").value.trim();
-  const payload = {
-    camera_id: id,
-    label: $("#cam-label").value.trim(),
-    enabled: $("#cam-enabled").checked,
-    source: {
-      host: $("#cam-host").value.trim(),
-      port: parseInt($("#cam-port").value, 10) || 554,
-      username: $("#cam-user").value,
-      password: $("#cam-pass").value,
-      brand: $("#cam-brand").value.trim(),
-      model: $("#cam-model").value.trim(),
-      channel: $("#cam-channel").value.trim() || "101",
-      path: $("#cam-brand").value.trim() ? "" : $("#cam-path").value.trim(),
-      fps: parseInt($("#cam-fps").value, 10) || 20,
-      width: 1280,
-      height: 720,
-    },
-    output: {
-      protocol:
-        $("#gateway-enabled").checked || $("#relay-enabled").checked ? "rtsp" : "none",
-      gateway: {
-        enabled: $("#gateway-enabled").checked,
-        access_mode: $("#gateway-access").value,
-        path: $("#gateway-path").value.trim() || id,
-      },
-      relay: {
-        enabled: $("#relay-enabled").checked,
-        mode: $("#relay-mode").value,
-        push_url: $("#relay-push").value.trim(),
-        listen_port: parseInt($("#relay-port").value, 10) || 8554,
-        path_suffix: $("#relay-path").value.trim() || id,
-        iframe_interval_sec: 3,
-        force_transcode_gop: false,
-      },
-      webrtc: {
-        enabled: $("#webrtc-enabled").checked,
-        mode: $("#webrtc-mode").value,
-        rewind_offset_sec: 3,
-      },
-    },
-    buffer: {
-      duration_seconds: parseFloat($("#buf-duration").value) || 60,
-      default_playback_offset_sec: parseFloat($("#buf-offset").value) || 6,
-      event_pre_seconds: 6,
-      event_post_seconds: 24,
-    },
-  };
-  try {
-    const editing = $("#cam-id").disabled;
-    if (editing) {
-      await api(`/api/v1/cameras/${id}`, { method: "PUT", json: payload });
-      toast("Cámara actualizada");
-    } else {
-      await api("/api/v1/cameras", { method: "POST", json: payload });
-      toast("Cámara creada");
-    }
-    clearForm();
-    await loadCameras();
-  } catch (err) {
-    toast(err.message, true);
-  }
-});
-
-async function deleteCamera(id) {
-  if (!confirm(`¿Eliminar ${id}?`)) return;
-  try {
-    await api(`/api/v1/cameras/${id}`, { method: "DELETE" });
-    toast("Eliminada");
-    await loadCameras();
-  } catch (err) {
-    toast(err.message, true);
-  }
-}
-
-function openTestPanel(cameraId) {
-  $$(".tabs button").forEach((b) => b.classList.remove("active"));
-  $('button[data-tab="test"]').classList.add("active");
-  $$(".tab-panel").forEach((p) => p.classList.add("hidden"));
-  $("#tab-test").classList.remove("hidden");
-  $("#test-camera-id").value = cameraId;
-  $("#test-snapshots").innerHTML = "";
-  $("#test-log").textContent = "";
-}
-
-$("#btn-discovery")?.addEventListener("click", async () => {
-  try {
-    toast("Escaneando red…");
-    const r = await api("/api/v1/discovery/scan", { method: "POST" });
-    toast(`Descubiertas: ${r.discovered}, nuevas: ${r.provisioned_new}`);
-    await loadCameras();
-  } catch (err) {
-    toast(err.message, true);
-  }
-});
-
-function logTest(msg) {
-  const el = $("#test-log");
-  el.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
-  el.scrollTop = el.scrollHeight;
-}
-
-$("#btn-snap-source")?.addEventListener("click", async () => {
-  const id = $("#test-camera-id").value;
-  if (!id) return toast("Selecciona cámara", true);
-  try {
-    const blob = await api(`/api/v1/cameras/${id}/snapshot/source`);
-    showSnapshot(blob, "Origen");
-    logTest("Snapshot origen OK");
-  } catch (err) {
-    logTest("Origen: " + err.message);
-    toast(err.message, true);
-  }
-});
-
-$("#btn-snap-relay")?.addEventListener("click", async () => {
-  const id = $("#test-camera-id").value;
-  if (!id) return toast("Selecciona cámara", true);
-  try {
-    const blob = await api(`/api/v1/cameras/${id}/snapshot/relay`);
-    showSnapshot(blob, "Relay");
-    logTest("Snapshot relay OK");
-  } catch (err) {
-    logTest("Relay: " + err.message);
-    toast(err.message, true);
-  }
-});
-
-function showSnapshot(blob, label) {
-  const box = $("#test-snapshots");
-  const url = URL.createObjectURL(blob);
-  const wrap = document.createElement("div");
-  wrap.innerHTML = `<div style="color:var(--muted);margin-bottom:0.25rem">${label}</div>`;
-  const img = document.createElement("img");
-  img.src = url;
-  wrap.appendChild(img);
-  box.appendChild(wrap);
-}
-
-$("#btn-broadcast-start")?.addEventListener("click", async () => {
-  const id = $("#test-camera-id").value;
-  try {
-    const r = await api(`/api/v1/cameras/${id}/broadcast/start`, { method: "POST" });
-    logTest("Broadcast iniciado: " + JSON.stringify(r.relay?.mode || "ok"));
-    toast("Broadcast iniciado");
-  } catch (err) {
-    logTest(err.message);
-    toast(err.message, true);
-  }
-});
-
-$("#btn-broadcast-stop")?.addEventListener("click", async () => {
-  const id = $("#test-camera-id").value;
-  try {
-    await api(`/api/v1/cameras/${id}/broadcast/stop`, { method: "POST" });
-    logTest("Broadcast detenido");
-    toast("Broadcast detenido");
-  } catch (err) {
-    toast(err.message, true);
-  }
-});
-
-$("#btn-test-playback")?.addEventListener("click", async () => {
-  const id = $("#test-camera-id").value;
-  const offset = parseFloat($("#test-offset").value) || 3;
-  try {
-    const meta = await api(`/api/v1/cameras/${id}/test/playback`, {
-      method: "POST",
-      json: { offset_sec: offset, live_tail: false },
-    });
-    logTest("Playback meta: " + JSON.stringify(meta));
-    const blob = await api(
-      `/api/v1/cameras/${id}/test/playback/stream?offset_sec=${offset}`
-    );
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `playback-${id}-${offset}s.kanv`;
-    a.click();
-    toast("Descarga de stream iniciada");
-  } catch (err) {
-    toast(err.message, true);
-  }
-});
-
-$("#btn-webrtc-connect")?.addEventListener("click", async () => {
-  const id = $("#test-camera-id").value?.trim();
-  if (!id) return toast("Indica ID de cámara", true);
-  try {
-    logTest("WebRTC: negociando WHEP…");
-    await KanvisWebRtcViewer.connect(id, api);
-    const badge = $("#webrtc-live-badge");
-    badge.textContent = "LIVE";
-    badge.classList.add("ok");
-    logTest("WebRTC: conectado");
-    toast("Visor WebRTC conectado");
-  } catch (err) {
-    logTest("WebRTC: " + err.message);
-    toast(err.message, true);
-    await KanvisWebRtcViewer.disconnect(api).catch(() => {});
-    const badge = $("#webrtc-live-badge");
-    badge.textContent = "OFF";
-    badge.classList.remove("ok");
-  }
-});
-
-$("#btn-webrtc-disconnect")?.addEventListener("click", async () => {
-  try {
-    await KanvisWebRtcViewer.disconnect(api);
-    const badge = $("#webrtc-live-badge");
-    badge.textContent = "OFF";
-    badge.classList.remove("ok");
-    logTest("WebRTC desconectado");
-    toast("Visor cerrado");
-  } catch (err) {
-    toast(err.message, true);
-  }
-});
-
-$("#btn-webrtc-rewind")?.addEventListener("click", async () => {
-  const id = $("#test-camera-id").value?.trim();
-  const offset = parseFloat($("#test-offset").value) || 3;
-  if (!id || !KanvisWebRtcViewer.isConnected()) {
-    return toast("Conecta WebRTC antes de rewind", true);
-  }
-  try {
-    const r = await KanvisWebRtcViewer.rewind(id, offset, api);
-    logTest(`Rewind ${offset}s: ${r.packets_queued} paquetes`);
-    toast(`Rewind: ${r.packets_queued} paquetes en cola`);
-  } catch (err) {
-    logTest("Rewind: " + err.message);
-    toast(err.message, true);
-  }
-});
-
-$("#btn-refresh-status")?.addEventListener("click", async () => {
-  const id = $("#test-camera-id").value;
-  try {
-    const st = await api(`/api/v1/cameras/${id}/status`);
-    logTest(JSON.stringify(st, null, 2));
-  } catch (err) {
-    toast(err.message, true);
-  }
-});
-
+/* —— Horario —— */
 const SCHED_DAY_LABELS = [
   { v: 0, l: "Lun" },
   { v: 1, l: "Mar" },
@@ -552,8 +704,6 @@ const SCHED_DAY_LABELS = [
   { v: 6, l: "Dom" },
 ];
 
-let scheduleCache = null;
-
 function renderScheduleWindows(windows) {
   const root = $("#sched-windows");
   if (!root) return;
@@ -561,24 +711,22 @@ function renderScheduleWindows(windows) {
   const list = windows?.length ? windows : [];
   if (!list.length) {
     root.innerHTML =
-      '<p style="color:var(--muted);font-size:0.85rem">Sin franjas. Añade una (ej. 08:50–14:05 lun–sáb).</p>';
+      '<p class="hint">Sin franjas. Añade una (ej. 08:50–14:05 lun–sáb).</p>';
     return;
   }
   list.forEach((win, idx) => {
     const row = document.createElement("div");
     row.className = "schedule-window-row";
-    row.style.cssText =
-      "border:1px solid var(--border);border-radius:8px;padding:0.75rem;margin-bottom:0.5rem";
     const days = win.days || [];
     const dayChecks = SCHED_DAY_LABELS.map(
       (d) =>
-        `<label style="margin-right:0.5rem;font-size:0.85rem"><input type="checkbox" data-day="${d.v}" ${days.includes(d.v) ? "checked" : ""}/> ${d.l}</label>`
+        `<label><input type="checkbox" data-day="${d.v}" ${days.includes(d.v) ? "checked" : ""}/> ${d.l}</label>`
     ).join("");
     row.innerHTML = `
-      <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.5rem">
+      <div class="actions" style="margin-bottom:0.5rem">
         <label>Inicio <input type="time" data-field="start" value="${win.start || "08:00"}" /></label>
         <label>Fin <input type="time" data-field="end" value="${win.end || "18:00"}" /></label>
-        <button type="button" class="danger secondary" data-remove="${idx}">Quitar</button>
+        <button type="button" class="btn-sm danger secondary" data-remove="${idx}">Quitar</button>
       </div>
       <div class="sched-days">${dayChecks}</div>
     `;
@@ -630,7 +778,6 @@ function updateScheduleStatusLine(status) {
 async function loadOperatingSchedule() {
   try {
     const data = await api("/api/v1/operating-schedule");
-    scheduleCache = data.schedule;
     $("#sched-enabled").checked = !!data.schedule?.enabled;
     $("#sched-timezone").value = data.schedule?.timezone || "";
     renderScheduleWindows(data.schedule?.windows || []);
@@ -642,11 +789,7 @@ async function loadOperatingSchedule() {
 
 $("#btn-sched-add-window")?.addEventListener("click", () => {
   const cur = collectScheduleFromUi().windows;
-  cur.push({
-    start: "08:50",
-    end: "14:05",
-    days: [0, 1, 2, 3, 4, 5],
-  });
+  cur.push({ start: "08:50", end: "14:05", days: [0, 1, 2, 3, 4, 5] });
   renderScheduleWindows(cur);
 });
 
@@ -657,12 +800,11 @@ $("#btn-sched-save")?.addEventListener("click", async () => {
   }
   for (const w of body.windows) {
     if (!w.days.length) {
-      return toast("Cada franja debe tener al menos un día marcado", true);
+      return toast("Cada franja debe tener al menos un día", true);
     }
   }
   try {
     const r = await api("/api/v1/operating-schedule", { method: "PUT", json: body });
-    scheduleCache = r.schedule;
     updateScheduleStatusLine(r.status);
     toast("Horario guardado");
     await loadCameras();
@@ -673,8 +815,7 @@ $("#btn-sched-save")?.addEventListener("click", async () => {
 
 async function loadSystem() {
   try {
-    const [cfg, sys, conn] = await Promise.all([
-      api("/api/v1/config"),
+    const [sys, conn] = await Promise.all([
       api("/api/v1/system/info"),
       api("/api/v1/connectivity/status").catch(() => ({ state: null })),
       loadOperatingSchedule(),
@@ -683,12 +824,8 @@ async function loadSystem() {
     $("#sys-device-name").textContent = sys.device_name || "—";
     $("#sys-device-id").textContent = sys.device_id || "—";
     updateDeviceHeader(null, sys);
-    $("#system-info").textContent = JSON.stringify({ config: cfg, system: sys }, null, 2);
-    if (sys.webui_url) {
-      toast(`Panel instalación: ${sys.webui_url} · WiFi ${sys.ap_ssid_hint}`);
-    }
   } catch (err) {
-    $("#system-info").textContent = err.message;
+    toast(err.message, true);
   }
 }
 
@@ -700,7 +837,7 @@ function updateDeviceHeader(session, sys) {
   if (name) {
     el.textContent = id ? `${name} (${id})` : name;
   } else if (id) {
-    el.textContent = `Dispositivo: ${id}`;
+    el.textContent = id;
   } else {
     el.textContent = "";
   }
@@ -708,7 +845,6 @@ function updateDeviceHeader(session, sys) {
 
 async function initApp() {
   const session = await api("/api/v1/webui/session");
-  $("#user-label").textContent = session.username ? `Usuario: ${session.username}` : "";
   updateDeviceHeader(session, null);
   await loadBrands();
   await loadCameras();
@@ -718,7 +854,7 @@ $("#btn-wan-sync")?.addEventListener("click", async () => {
   try {
     const r = await api("/api/v1/connectivity/sync?force=true", { method: "POST" });
     $("#connectivity-info").textContent = JSON.stringify(r, null, 2);
-    toast("IP sincronizada (DDNS + nube)");
+    toast("IP sincronizada");
   } catch (err) {
     toast(err.message, true);
   }

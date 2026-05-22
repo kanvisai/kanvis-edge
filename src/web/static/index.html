@@ -2,223 +2,86 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Kanvis Edge — Configuración</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0e14" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Kanvis Edge</title>
+  <link rel="icon" href="/static/img/kanvis_logo.png" type="image/png" />
   <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
   <div id="login-screen">
     <div class="login-card">
-      <h1>Kanvis Edge</h1>
+      <img src="/static/img/kanvis_web.png" alt="Kanvis" class="login-logo" width="280" height="auto" />
       <p class="sub">Configuración del gateway en tienda</p>
       <form id="login-form">
         <label for="login-user">Usuario</label>
         <input id="login-user" name="username" autocomplete="username" required />
         <label for="login-pass">Contraseña</label>
         <input id="login-pass" name="password" type="password" autocomplete="current-password" required />
-        <button type="submit">Entrar</button>
+        <button type="submit" class="btn-block">Entrar</button>
       </form>
     </div>
   </div>
 
   <div id="app" class="hidden">
-    <header>
-      <div>
-        <h1>Kanvis Edge Gateway</h1>
-        <span id="device-label" style="color:var(--muted);font-size:0.9rem;display:block"></span>
-        <span id="user-label" style="color:var(--muted);font-size:0.85rem"></span>
+    <header class="app-header">
+      <img src="/static/img/kanvis_logo.png" alt="" class="header-logo" width="36" height="36" />
+      <div class="header-titles">
+        <span class="header-title">Kanvis Edge</span>
+        <span id="device-label" class="header-sub"></span>
       </div>
-      <button type="button" class="secondary" id="btn-logout">Cerrar sesión</button>
+      <button type="button" class="btn-icon secondary" id="btn-logout" title="Cerrar sesión">Salir</button>
     </header>
 
-    <nav class="tabs">
-      <button type="button" data-tab="cameras" class="active">Cámaras</button>
-      <button type="button" data-tab="test">Probar</button>
-      <button type="button" data-tab="system">Sistema</button>
+    <main class="app-main">
+      <section id="tab-cameras" class="tab-panel">
+        <div class="cam-toolbar">
+          <button type="button" class="btn-block primary" id="btn-add-device">+ Añadir cámara (IP)</button>
+        </div>
+        <nav id="device-nav" class="device-nav" aria-label="Cámaras por IP"></nav>
+        <div id="device-panels" class="device-panels">
+          <p class="empty-hint" id="cameras-empty">Pulsa «Añadir cámara» para configurar una IP.</p>
+        </div>
+      </section>
+
+      <section id="tab-system" class="tab-panel hidden">
+        <details class="panel" open>
+          <summary>Horario (búfer + broadcast)</summary>
+          <p class="hint">Fuera de estas franjas no hay ingesta ni rebroadcast.</p>
+          <label class="check-row"><input type="checkbox" id="sched-enabled" /> Activar horario</label>
+          <label>Zona horaria</label>
+          <input id="sched-timezone" placeholder="Europe/Madrid" />
+          <p id="sched-status-line" class="status-line">—</p>
+          <div id="sched-windows"></div>
+          <div class="actions">
+            <button type="button" class="secondary" id="btn-sched-add-window">+ Franja</button>
+            <button type="button" id="btn-sched-save">Guardar horario</button>
+          </div>
+        </details>
+        <details class="panel">
+          <summary>Conectividad nube</summary>
+          <button type="button" id="btn-wan-sync" class="btn-block secondary">Sincronizar IP</button>
+          <pre id="connectivity-info" class="log compact">—</pre>
+        </details>
+        <details class="panel">
+          <summary>Info dispositivo</summary>
+          <p><strong>Nombre:</strong> <span id="sys-device-name">—</span></p>
+          <p><strong>ID:</strong> <span id="sys-device-id">—</span></p>
+        </details>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Secciones">
+      <button type="button" data-tab="cameras" class="active">
+        <span class="nav-icon">📷</span>
+        <span>Cámaras</span>
+      </button>
+      <button type="button" data-tab="system">
+        <span class="nav-icon">⚙</span>
+        <span>Sistema</span>
+      </button>
     </nav>
-
-    <section id="tab-cameras" class="tab-panel panel">
-      <div class="grid-2">
-        <div>
-          <h2>Cámaras registradas</h2>
-          <button type="button" class="secondary" id="btn-discovery">Buscar en red</button>
-          <div id="camera-list" style="margin-top:1rem"></div>
-        </div>
-        <div>
-          <h2 id="form-title">Añadir cámara</h2>
-          <form id="camera-form">
-            <label>ID</label>
-            <input id="cam-id" required placeholder="cam-01" />
-            <label>Nombre</label>
-            <input id="cam-label" placeholder="Estantería 1" />
-            <label><input type="checkbox" id="cam-enabled" checked /> Activa</label>
-            <fieldset>
-              <legend>RTSP origen</legend>
-              <label>Marca / fabricante</label>
-              <select id="cam-brand">
-                <option value="">— Manual (ruta RTSP propia) —</option>
-              </select>
-              <p id="brand-hint" class="field-hint" style="color:var(--muted);font-size:0.85rem;margin:0.25rem 0 0.75rem"></p>
-              <label>Modelo (opcional)</label>
-              <input id="cam-model" placeholder="Si el perfil lista modelos concretos" />
-              <label>Canal RTSP</label>
-              <input id="cam-channel" value="101" placeholder="101 = main, 102 = sub (Annke/Hik)" />
-              <label>Host / IP</label>
-              <input id="cam-host" required placeholder="192.168.1.100" />
-              <label>Puerto</label>
-              <input id="cam-port" type="number" value="554" />
-              <label>Usuario</label>
-              <input id="cam-user" />
-              <label>Contraseña</label>
-              <input id="cam-pass" type="password" />
-              <label id="cam-path-label">Ruta RTSP (solo modo manual)</label>
-              <input id="cam-path" value="/Streaming/Channels/101" />
-              <label>Vista previa URL vivo</label>
-              <input id="cam-url-preview" readonly class="readonly" placeholder="Selecciona marca y rellena host…" />
-              <label>FPS</label>
-              <input id="cam-fps" type="number" value="20" />
-            </fieldset>
-            <fieldset>
-              <legend>RTSP gateway (un puerto)</legend>
-              <label>Acceso externo</label>
-              <select id="gateway-access">
-                <option value="gateway">gateway — proxy edge (recomendado)</option>
-                <option value="direct">direct — PF al puerto de la cámara</option>
-                <option value="relay">relay — FFmpeg por puerto</option>
-              </select>
-              <label><input type="checkbox" id="gateway-enabled" /> Publicar en gateway MediaMTX</label>
-              <label>Ruta pública</label>
-              <input id="gateway-path" placeholder="cam-01" />
-            </fieldset>
-            <fieldset>
-              <legend>Rebroadcast RTSP</legend>
-              <label><input type="checkbox" id="relay-enabled" /> Activar relay</label>
-              <label>Modo</label>
-              <select id="relay-mode">
-                <option value="listen">listen (servidor en edge)</option>
-                <option value="push">push (hacia URL remota)</option>
-              </select>
-              <label>URL push</label>
-              <input id="relay-push" placeholder="rtsp://..." />
-              <label>Puerto listen</label>
-              <input id="relay-port" type="number" value="8554" />
-              <label>Sufijo ruta</label>
-              <input id="relay-path" placeholder="cam-01" />
-            </fieldset>
-            <fieldset>
-              <legend>WebRTC</legend>
-              <label><input type="checkbox" id="webrtc-enabled" /> Activar WebRTC</label>
-              <label>Modo</label>
-              <select id="webrtc-mode">
-                <option value="whep">whep (visor)</option>
-                <option value="whip">whip (push nube)</option>
-              </select>
-            </fieldset>
-            <fieldset>
-              <legend>Búfer</legend>
-              <label>Duración (s)</label>
-              <input id="buf-duration" type="number" value="60" min="1" max="300" />
-              <label>Playback default (s)</label>
-              <input id="buf-offset" type="number" value="6" step="0.1" />
-            </fieldset>
-            <div class="actions">
-              <button type="submit">Guardar</button>
-              <button type="button" class="secondary" id="btn-clear-form">Nueva</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </section>
-
-    <section id="tab-test" class="tab-panel panel hidden">
-      <h2>Probar cámara</h2>
-      <label>ID cámara</label>
-      <input id="test-camera-id" placeholder="cam-01" />
-      <label>Offset playback (s)</label>
-      <input id="test-offset" type="number" value="3" step="0.1" min="0.1" max="120" />
-
-      <div id="webrtc-viewer-panel" class="webrtc-panel">
-        <h3>Visor WebRTC <span id="webrtc-live-badge" class="badge">OFF</span></h3>
-        <p class="webrtc-hint">
-          Vista previa vía WHEP (H.264 del búfer/ingesta). La cámara debe estar activa y con ingesta.
-          Marca <strong>Activar WebRTC</strong> al guardar si quieres persistir la opción.
-        </p>
-        <div class="webrtc-layout">
-          <div class="webrtc-video-wrap">
-            <video id="webrtc-video" playsinline muted autoplay></video>
-          </div>
-          <div class="stats-grid" aria-live="polite">
-            <div class="stat-item"><span class="stat-label">FPS pantalla</span><span class="stat-value" id="stat-display-fps">—</span></div>
-            <div class="stat-item"><span class="stat-label">FPS WebRTC</span><span class="stat-value" id="stat-rtc-fps">—</span></div>
-            <div class="stat-item"><span class="stat-label">Resolución</span><span class="stat-value" id="stat-resolution">—</span></div>
-            <div class="stat-item"><span class="stat-label">Frames decod.</span><span class="stat-value" id="stat-frames-decoded">—</span></div>
-            <div class="stat-item"><span class="stat-label">Caídos</span><span class="stat-value" id="stat-dropped">—</span></div>
-            <div class="stat-item"><span class="stat-label">Jitter</span><span class="stat-value" id="stat-jitter">—</span></div>
-            <div class="stat-item"><span class="stat-label">Recibido</span><span class="stat-value" id="stat-bytes-rx">—</span></div>
-            <div class="stat-item"><span class="stat-label">ICE</span><span class="stat-value" id="stat-ice">—</span></div>
-            <div class="stat-item"><span class="stat-label">Conexión</span><span class="stat-value" id="stat-connection">—</span></div>
-            <div class="stat-item"><span class="stat-label">Ingesta</span><span class="stat-value" id="stat-ingest">—</span></div>
-            <div class="stat-item"><span class="stat-label">Paquetes/s ingesta</span><span class="stat-value" id="stat-ingest-pps">—</span></div>
-            <div class="stat-item"><span class="stat-label">Búfer RAM</span><span class="stat-value" id="stat-buffer">—</span></div>
-            <div class="stat-item"><span class="stat-label">Rewind pend.</span><span class="stat-value" id="stat-rewind-pending">—</span></div>
-          </div>
-        </div>
-        <div class="actions">
-          <button type="button" id="btn-webrtc-connect">Conectar WebRTC</button>
-          <button type="button" class="secondary" id="btn-webrtc-disconnect" disabled>Desconectar</button>
-          <button type="button" class="secondary" id="btn-webrtc-rewind" disabled>Rewind (offset)</button>
-        </div>
-      </div>
-
-      <div class="actions">
-        <button type="button" id="btn-snap-source">Snapshot origen</button>
-        <button type="button" id="btn-snap-relay">Snapshot relay</button>
-        <button type="button" id="btn-broadcast-start">Iniciar broadcast</button>
-        <button type="button" id="btn-broadcast-stop">Parar broadcast</button>
-        <button type="button" id="btn-test-playback">Test playback</button>
-        <button type="button" class="secondary" id="btn-refresh-status">Estado JSON</button>
-      </div>
-      <div id="test-snapshots" class="snapshots"></div>
-      <pre id="test-log" class="log"></pre>
-    </section>
-
-    <section id="tab-system" class="tab-panel panel hidden">
-      <h2>Configuración global</h2>
-      <div class="panel" style="margin-bottom:1rem;padding:0.75rem 1rem">
-        <h3 style="margin:0 0 0.5rem;font-size:1rem">Dispositivo</h3>
-        <p style="margin:0.25rem 0"><strong>Nombre:</strong> <span id="sys-device-name">—</span></p>
-        <p style="margin:0.25rem 0"><strong>ID:</strong> <span id="sys-device-id">—</span></p>
-        <p style="color:var(--muted);font-size:0.85rem;margin:0.5rem 0 0">
-          Edita <code>DEVICE_NAME</code> y <code>DEVICE_ID</code> en
-          <code>/opt/kanvis-edge/.env</code> y reinicia <code>kanvis-edge</code>.
-        </p>
-      </div>
-      <div class="panel schedule-panel" style="margin-bottom:1rem">
-        <h3 style="margin:0 0 0.5rem;font-size:1rem">Horario operativo (búfer + broadcast)</h3>
-        <p style="color:var(--muted);font-size:0.85rem;margin:0 0 0.75rem">
-          Fuera de estas franjas el edge no ingesta vídeo (sin búfer RAM) ni hace rebroadcast RTSP.
-          Domingo sin ventanas = todo el día inactivo si solo marcas lun–sáb.
-        </p>
-        <label><input type="checkbox" id="sched-enabled" /> Activar horario</label>
-        <label style="display:block;margin-top:0.5rem">Zona horaria (opcional)</label>
-        <input id="sched-timezone" placeholder="Europe/Madrid" style="max-width:16rem" />
-        <p id="sched-status-line" style="margin:0.75rem 0;font-size:0.9rem">—</p>
-        <div id="sched-windows"></div>
-        <div class="actions" style="margin-top:0.75rem">
-          <button type="button" class="secondary" id="btn-sched-add-window">Añadir franja</button>
-          <button type="button" id="btn-sched-save">Guardar horario</button>
-        </div>
-      </div>
-      <div class="actions" style="margin-bottom:0.75rem">
-        <button type="button" id="btn-wan-sync">Sincronizar IP (DDNS + nube)</button>
-      </div>
-      <pre id="connectivity-info" class="log" style="max-height:120px">—</pre>
-      <pre id="system-info" class="log">Cargando…</pre>
-      <p style="color:var(--muted);font-size:0.85rem">
-        En instalación vía AP: conéctate a <strong>kanvis-XXXX</strong> y abre
-        <strong>http://192.168.192.192</strong> (Fase 5).
-      </p>
-    </section>
   </div>
 
   <div id="toast" class="hidden"></div>
