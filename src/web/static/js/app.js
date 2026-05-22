@@ -495,11 +495,16 @@ function renderConnectionHints(el, info, mode) {
     html += `<p class="hint">Vista previa con los datos del formulario (sin guardar aún).</p>`;
   }
   const pu = info.panel_urls || {};
+  if (pu.public_ip) {
+    html += `<p class="hint"><strong>IP pública del edge:</strong> ${escapeHtml(
+      pu.public_ip
+    )} <button type="button" class="btn-sm" data-refresh-public-ip="">Actualizar IP</button></p>`;
+  }
   if (pu.note) {
     html += `<p class="hint">${escapeHtml(pu.note)}</p>`;
   }
   if (pu.access && pu.public && pu.access !== pu.public) {
-    html += `<p class="hint">Navegador: <code>${escapeHtml(pu.access)}</code> · Enlaces: <code>${escapeHtml(
+    html += `<p class="hint">Navegador: <code>${escapeHtml(pu.access)}</code> · Desde fuera: <code>${escapeHtml(
       pu.public
     )}</code></p>`;
   }
@@ -570,6 +575,24 @@ function renderConnectionHints(el, info, mode) {
         toast("No se pudo copiar", true);
       }
     });
+  });
+  el.querySelector("[data-refresh-public-ip]")?.addEventListener("click", async (e) => {
+    const card = e.target.closest(".channel-card");
+    const cameraId = card?.dataset?.cameraId;
+    try {
+      toast("Detectando IP pública…");
+      await api("/api/v1/connectivity/public-ip/refresh", { method: "POST" });
+      if (cameraId && card) {
+        const deviceKey = card.closest(".device-card")?.dataset?.deviceKey;
+        const devices = getAllDevices();
+        const device = devices.find((d) => d.key === deviceKey);
+        const cam = device?.channels?.find((c) => c.camera?.camera_id === cameraId)?.camera;
+        if (device && cam) await loadAccessInfo(cameraId, card, device, cam);
+      }
+      toast("IP pública actualizada");
+    } catch (err) {
+      toast(err.message, true);
+    }
   });
 }
 
@@ -1000,12 +1023,17 @@ async function saveCameraDevice(device, panel) {
   }
 }
 
-function isBroadcastRunning(st) {
+/** Broadcast activado en el edge (ingesta solicitada), aunque RTSP aún falle. */
+function isBroadcastActive(st) {
   return !!(
+    st.broadcast_ingest_active ||
     st.relay?.running ||
-    st.webrtc?.session?.connection_state === "connected" ||
-    (st.ingest?.connected && (st.buffer_span_seconds || 0) > 0.5)
+    st.webrtc?.session?.connection_state === "connected"
   );
+}
+
+function hasWorkingIngest(st) {
+  return !!(st.ingest?.connected && (st.buffer_span_seconds || 0) >= 0.35);
 }
 
 async function refreshChannelStatus(cameraId, card, device, cam) {
@@ -1015,18 +1043,24 @@ async function refreshChannelStatus(cameraId, card, device, cam) {
   const bufHint = card.querySelector(".buf-hint");
   try {
     const st = await api(`/api/v1/cameras/${cameraId}/status`);
-    const ing = st.ingest?.connected;
+    const ing = hasWorkingIngest(st);
     const relay = st.relay?.running;
     const rtc = st.webrtc?.session?.connection_state === "connected";
     const span = st.buffer_span_seconds || 0;
-    const bcOn = isBroadcastRunning(st);
+    const bcOn = isBroadcastActive(st);
 
     let html = ing
       ? '<span class="badge ok">Ingesta OK</span>'
-      : '<span class="badge warn">Sin ingesta</span>';
-    if (relay) html += ' <span class="badge ok">RTSP</span>';
-    if (rtc) html += ' <span class="badge ok">WebRTC</span>';
-    html += ` <span class="badge muted">Búfer ${span.toFixed(0)}s</span>`;
+      : st.broadcast_ingest_active
+        ? '<span class="badge warn">Sin ingesta RTSP</span>'
+        : '<span class="badge muted">Broadcast off</span>';
+    if (relay) html += ' <span class="badge ok">Relay RTSP</span>';
+    if (rtc) {
+      html += ing
+        ? ' <span class="badge ok">WebRTC</span>'
+        : ' <span class="badge warn">WebRTC (sin vídeo)</span>';
+    }
+    html += ` <span class="badge muted">Búfer ${span.toFixed(1)}s</span>`;
     badge.innerHTML = html;
 
     if (toggle) {
@@ -1035,12 +1069,18 @@ async function refreshChannelStatus(cameraId, card, device, cam) {
       toggle.classList.toggle("off", !bcOn);
     }
     if (bufHint) {
-      bufHint.textContent = bcOn
-        ? `Búfer: ${span.toFixed(0)}s / ${st.buffer_max_duration_seconds || 60}s`
-        : "El búfer solo se rellena con broadcast activo.";
+      if (!bcOn) {
+        bufHint.textContent = "El búfer solo se rellena con broadcast activo.";
+      } else if (!ing) {
+        bufHint.textContent =
+          st.ingest_hint ||
+          "Broadcast activo pero sin vídeo: revisa IP, canal (stream1/stream2), marca y credenciales.";
+      } else {
+        bufHint.textContent = `Búfer: ${span.toFixed(0)}s / ${st.buffer_max_duration_seconds || 60}s — ingesta en marcha`;
+      }
     }
     if (playbackBtn) {
-      playbackBtn.disabled = !bcOn || span < PLAYBACK_OFFSET_SEC * 0.85;
+      playbackBtn.disabled = !ing || span < PLAYBACK_OFFSET_SEC * 0.85;
     }
     card.dataset.broadcastOn = bcOn ? "1" : "0";
     if (device && cam) loadAccessInfo(cameraId, card, device, cam);
@@ -1063,15 +1103,21 @@ function syncBroadcastModeRadios(card, cameraId, mode) {
   updateBroadcastModeUi(card, mode);
 }
 
-async function waitForIngest(cameraId, maxMs = 15000) {
+async function waitForIngest(cameraId, maxMs = 20000) {
   const t0 = Date.now();
   while (Date.now() - t0 < maxMs) {
     const st = await api(`/api/v1/cameras/${cameraId}/status`);
-    if (st.ingest?.connected) return st;
+    if (hasWorkingIngest(st)) return st;
     await new Promise((r) => setTimeout(r, 500));
   }
+  let hint = "";
+  try {
+    const st = await api(`/api/v1/cameras/${cameraId}/status`);
+    hint = st.ingest_hint || st.ingest?.last_error || "";
+  } catch (_) {}
   throw new Error(
-    "La ingesta no arrancó; revisa IP, canal, marca y credenciales de la cámara"
+    hint ||
+      "La ingesta RTSP no recibe vídeo; revisa IP, canal (stream1/stream2), marca y credenciales"
   );
 }
 
@@ -1130,10 +1176,11 @@ async function toggleBroadcast(device, cam, card) {
           : `/api/v1/cameras/${cameraId}/broadcast/start`;
       setChannelBusy(card, true, "Arrancando ingesta…");
       const startRes = await api(url, { method: "POST" });
-      if (mode === "webrtc" && startRes?.ingest_ready === false) {
-        await waitForIngest(cameraId);
-      } else if (mode === "webrtc") {
-        await waitForIngest(cameraId, 8000).catch(() => {});
+      if (!startRes?.ingest_ready) {
+        const err =
+          startRes?.ingest_last_error ||
+          "La cámara no envía vídeo RTSP al edge (revisa «Probar conexión»).";
+        throw new Error(err);
       }
 
       if (mode === "webrtc") {

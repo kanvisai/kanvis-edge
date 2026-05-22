@@ -78,12 +78,18 @@ def get_schedule_service(request: Request) -> OperatingScheduleService:
 
 
 @router.get("/health")
-async def health() -> dict:
+async def health(request: Request) -> dict:
     from src.webrtc.publisher import WEBRTC_PEER_CONFIG_VERSION
+
+    public_ip = ""
+    pip = getattr(request.app.state, "public_ip_service", None)
+    if pip:
+        public_ip = pip.get_cached()
 
     return {
         "status": "ok",
         "ui_version": "2025-05-broadcast-conn-hints",
+        "public_ip": public_ip,
         "features": {
             "rtsp_probe_tools": True,
             "rtsp_probe_paths": [
@@ -178,10 +184,48 @@ async def system_info(
     }
 
 
+@router.get("/connectivity/public-ip")
+async def connectivity_public_ip(
+    request: Request,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+    refresh: bool = Query(default=False, description="Forzar consulta ipify ahora"),
+) -> dict:
+    """IP pública actual del edge (automática; no hace falta EDGE_PANEL_PUBLIC_URL)."""
+    svc = getattr(request.app.state, "public_ip_service", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Servicio de IP pública no disponible")
+    try:
+        if refresh:
+            ip = await svc.refresh(force=True)
+        else:
+            ip = svc.get_cached() or await svc.refresh()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudo detectar IP pública: {exc}",
+        ) from exc
+    urls = _resolve_panel_urls(request, settings)
+    return {
+        **svc.get_status(),
+        "panel_url": urls["api_base"],
+        "url_note": urls["url_note"],
+    }
+
+
+@router.post("/connectivity/public-ip/refresh")
+async def connectivity_public_ip_refresh(
+    request: Request,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> dict:
+    """Actualiza la IP pública ahora (p. ej. tras cambio de ISP)."""
+    return await connectivity_public_ip(request, settings, refresh=True)
+
+
 @router.get("/connectivity/status")
 async def connectivity_status(
     settings: Annotated[AppSettings, Depends(get_app_settings)],
     wan: Annotated[WanSyncService | None, Depends(get_wan_sync)],
+    request: Request,
 ) -> dict:
     """Estado DDNS y último reporte a la nube."""
     port_matrix_url = "/docs/PORT_FORWARDING.md"
@@ -199,9 +243,15 @@ async def connectivity_status(
     elif settings.ddns_hostname:
         base["ddns_fqdn_hint"] = settings.ddns_hostname
 
+    pip = getattr(request.app.state, "public_ip_service", None)
+    if pip:
+        base["public_ip_auto"] = pip.get_status()
     if wan is None:
         base["state"] = None
-        base["message"] = "WAN sync no activo (activa DDNS_ENABLED o CLOUD_REPORT_ENABLED)"
+        if not pip or not pip.get_cached():
+            base["message"] = (
+                "WAN sync opcional inactivo; la IP pública se detecta igual en segundo plano"
+            )
         return base
     return {**base, "state": wan.state.to_dict()}
 
@@ -433,8 +483,21 @@ def _is_loopback_host(host: str) -> bool:
     return h in ("localhost", "127.0.0.1", "::1", "[::1]")
 
 
+def _cached_public_ip(request: Request) -> str:
+    pip_svc = getattr(request.app.state, "public_ip_service", None)
+    if pip_svc and pip_svc.get_cached():
+        return pip_svc.get_cached()
+    wan = getattr(request.app.state, "wan_sync_service", None)
+    if wan and wan.state.public_ip.strip():
+        return wan.state.public_ip.strip()
+    return ""
+
+
 def _resolve_panel_urls(request: Request, settings: AppSettings) -> dict[str, str]:
-    """URL para enlaces en la UI: prioriza EDGE_PANEL_PUBLIC_URL, no localhost si hay IP WAN."""
+    """
+    URLs para broadcast / WebRTC / relay vistos desde fuera.
+    La IP de la cámara (RTSP origen) sigue siendo la privada en source; aquí va la IP pública del edge.
+    """
     scheme = (
         (request.headers.get("x-forwarded-proto") or request.url.scheme or "http")
         .split(",")[0]
@@ -447,35 +510,37 @@ def _resolve_panel_urls(request: Request, settings: AppSettings) -> dict[str, st
     )
     port = settings.edge_api_port
     access_base = f"{scheme}://{host_raw}".rstrip("/") if host_raw else ""
-
     configured = (settings.edge_panel_public_url or "").strip().rstrip("/")
-    wan = getattr(request.app.state, "wan_sync_service", None)
-    wan_ip = (wan.state.public_ip.strip() if wan and wan.state.public_ip else "")
+    detected = _cached_public_ip(request)
+    lan = settings.ap_ip or "192.168.192.192"
 
     public_base = ""
     note = ""
 
     if configured:
         public_base = configured
-        note = "URL pública de EDGE_PANEL_PUBLIC_URL en /etc/kanvis-edge/env."
-    elif host_raw and not _is_loopback_host(host_raw):
-        public_base = access_base
-        note = "Misma dirección con la que abriste este panel en el navegador."
-    elif wan_ip:
-        public_base = f"{scheme}://{wan_ip}:{port}"
+        note = "URL fija de EDGE_PANEL_PUBLIC_URL (opcional; anula la detección automática)."
+    elif detected:
+        public_base = f"{scheme}://{detected}:{port}"
         if access_base and _is_loopback_host(host_raw):
             note = (
-                f"Abres el panel por {host_raw or 'localhost'} (túnel o equipo local). "
-                f"Desde internet o otro PC usa la URL pública de abajo (reenvía el puerto {port})."
+                f"IP pública detectada automáticamente: {detected}. "
+                f"Abres el panel por {host_raw} (túnel/local); desde fuera usa la URL de abajo "
+                f"(reenvío de puertos {port} y relay RTSP en el router)."
             )
         else:
-            note = "URL con la IP pública detectada del edge (WAN sync)."
+            note = (
+                f"IP pública detectada automáticamente: {detected} "
+                f"(se actualiza cada pocos minutos)."
+            )
+    elif host_raw and not _is_loopback_host(host_raw):
+        public_base = access_base
+        note = "Sin IP pública en caché aún; usando la misma URL del navegador."
     else:
-        lan = settings.ap_ip or "192.168.192.192"
         public_base = f"{scheme}://{lan}:{port}"
         note = (
-            f"Configura EDGE_PANEL_PUBLIC_URL=http://TU_IP:8000 en /etc/kanvis-edge/env. "
-            f"Mientras tanto, en la LAN del edge: {public_base}"
+            f"Aún no hay IP pública detectada. En la LAN del edge: {public_base}. "
+            "Comprueba salida a internet del guardia."
         )
 
     api_base = public_base or access_base or f"{scheme}://127.0.0.1:{port}"
@@ -483,8 +548,10 @@ def _resolve_panel_urls(request: Request, settings: AppSettings) -> dict[str, st
         "api_base": api_base,
         "access_url": access_base,
         "public_url": public_base,
+        "public_ip": detected,
+        "public_host": detected or lan,
         "url_note": note,
-        "lan_ip": settings.ap_ip or "IP_LAN_DEL_EDGE",
+        "lan_ip": lan,
     }
 
 
@@ -531,7 +598,8 @@ def _build_camera_access_info(
     try:
         _, out_url = build_relay_urls(camera, settings, listen_port)
         local_url = local_listen_url(out_url)
-        lan_url = out_url.replace("0.0.0.0", lan_ip).replace("127.0.0.1", lan_ip)
+        ext_host = panel_urls.get("public_host") or lan_ip
+        lan_url = out_url.replace("0.0.0.0", ext_host).replace("127.0.0.1", ext_host)
         relay_preview = {
             "listen_port": listen_port,
             "url_local": local_url,
@@ -594,6 +662,7 @@ def _build_camera_access_info(
         "webrtc": webrtc_block,
         "panel_urls": {
             "public": panel_urls.get("public_url") or api_base,
+            "public_ip": panel_urls.get("public_ip") or "",
             "access": panel_urls.get("access_url") or "",
             "note": panel_urls.get("url_note") or "",
         },
@@ -794,17 +863,49 @@ async def playback(
 @router.get("/cameras/{camera_id}/status")
 async def camera_status(
     camera_id: str,
+    repo: Annotated[CameraRepository, Depends(get_repository)],
     manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
     gateway_manager: Annotated[GatewayManager, Depends(get_gateway_manager)],
     webrtc_manager: Annotated[WebRtcManager, Depends(get_webrtc_manager)],
     settings: Annotated[AppSettings, Depends(get_app_settings)],
 ) -> dict:
+    broadcast_ingest_active = manager.is_broadcast_ingest_active(camera_id)
     consumer = manager.get_consumer(camera_id)
     buffer = manager.get_buffer(camera_id)
-    camera = manager.get_camera_record(camera_id)
-    if not consumer or not buffer or not camera:
-        raise HTTPException(status_code=404, detail="Cámara no activa")
+    camera = await repo.get(camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail="Cámara no encontrada")
+
+    def _ingest_hint(ingest: dict, span: float) -> str | None:
+        if not broadcast_ingest_active:
+            return "Activa broadcast para que el edge lea RTSP de la cámara y rellene el búfer."
+        if not ingest.get("connected") or span < 0.35:
+            err = ingest.get("last_error") or "no conecta a la URL RTSP"
+            return (
+                f"Broadcast ON pero sin vídeo en búfer. El edge sí intenta ingesta; "
+                f"revisa IP/canal/marca (prueba «Probar conexión»). Error: {err}"
+            )
+        return None
+
+    if not consumer or not buffer:
+        ingest_snap: dict = {}
+        span = 0.0
+        return {
+            "camera_id": camera_id,
+            "label": camera.label,
+            "broadcast_ingest_active": broadcast_ingest_active,
+            "ingest": {**ingest_snap, "connected": False},
+            "buffer_packets": 0,
+            "buffer_span_seconds": span,
+            "buffer_max_duration_seconds": camera.effective_buffer_duration(
+                settings.buffer_duration_seconds
+            ),
+            "consumer_alive": False,
+            "ingest_hint": _ingest_hint(ingest_snap, span),
+            "output_protocol": camera.output.protocol.value,
+            "webrtc": {"enabled": camera.output.webrtc.enabled},
+        }
     relay = relay_manager.get_relay(camera_id)
     relay_info: dict | None = None
     if camera.output.relay.enabled:
@@ -841,6 +942,8 @@ async def camera_status(
         }
     except (FileNotFoundError, ValueError, KeyError):
         rtsp_urls = None
+    ingest_snap = consumer.metrics.snapshot()
+    span = round(buffer.span_seconds(), 2)
     return {
         "camera_id": camera_id,
         "label": camera.label,
@@ -849,9 +952,11 @@ async def camera_status(
         "source_host": camera.source.host,
         "source_rtsp_url_masked": _mask_url(camera.rtsp_url(settings=settings)),
         "rtsp_urls_masked": rtsp_urls,
-        "ingest": consumer.metrics.snapshot(),
+        "broadcast_ingest_active": broadcast_ingest_active,
+        "ingest_hint": _ingest_hint(ingest_snap, span),
+        "ingest": ingest_snap,
         "buffer_packets": buffer.size(),
-        "buffer_span_seconds": round(buffer.span_seconds(), 2),
+        "buffer_span_seconds": span,
         "buffer_max_duration_seconds": buffer.max_duration_seconds,
         "consumer_alive": consumer.is_running,
         "output_protocol": camera.output.protocol.value,

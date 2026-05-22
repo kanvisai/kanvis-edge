@@ -22,6 +22,7 @@ from src.gateway.manager import GatewayManager
 from src.relay.manager import RelayManager
 from src.webrtc.manager import WebRtcManager
 from src.schedule.service import OperatingScheduleService
+from src.services.public_ip import PublicIpService
 from src.services.wan_sync import WanSyncService
 from src.services.security import SecurityManager
 
@@ -71,6 +72,16 @@ async def lifespan(app: FastAPI):
 
     tasks.append(loop.create_task(_inventory_loop()))
 
+    public_ip_service = PublicIpService(settings)
+    app.state.public_ip_service = public_ip_service
+    try:
+        await public_ip_service.refresh()
+    except Exception:
+        logger.warning(
+            "IP pública no disponible al arranque; se reintentará en segundo plano"
+        )
+    tasks.append(loop.create_task(public_ip_service.run_loop()))
+
     if settings.discovery_enabled:
         scanner = NetworkScanner(settings, app.state.camera_repository)
         app.state.network_scanner = scanner
@@ -89,6 +100,8 @@ async def lifespan(app: FastAPI):
 
     for task in tasks:
         task.cancel()
+    if hasattr(app.state, "public_ip_service"):
+        app.state.public_ip_service.stop()
     consumer_manager.shutdown_all()
     relay_manager.shutdown_all()
     await gateway_manager.shutdown()

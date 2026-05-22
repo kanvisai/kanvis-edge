@@ -10,9 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from src.config_loader import AppSettings, DDNSProvider
+from src.services.public_ip import fetch_public_ip_from_internet
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +82,7 @@ class WanSyncService:
             pass
 
     async def fetch_public_ip(self) -> str:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get("https://api.ipify.org?format=json")
-            resp.raise_for_status()
-            return str(resp.json()["ip"])
+        return await fetch_public_ip_from_internet()
 
     def _build_ddns_url(self, public_ip: str) -> str:
         provider = self._settings.ddns_provider
