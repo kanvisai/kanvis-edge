@@ -159,6 +159,13 @@ function upsertDeviceDraft(device) {
   else draftDevices.push(snap);
 }
 
+function broadcastModeFromCamera(cam) {
+  const out = cam?.output || {};
+  if (out.webrtc?.enabled || out.protocol === "webrtc") return "webrtc";
+  if (out.relay?.enabled || out.protocol === "rtsp") return "rtsp";
+  return "rtsp";
+}
+
 function mergeDraftWithSaved(draft, dev) {
   return {
     ...dev,
@@ -198,7 +205,7 @@ function getAllDevices() {
         ...dev,
         fromApi: true,
         probeChannel: dev.probeChannel || firstCam?.source?.channel || "101",
-        broadcastMode: firstCam?.output?.webrtc?.enabled ? "webrtc" : "rtsp",
+        broadcastMode: broadcastModeFromCamera(firstCam),
         path: "/Streaming/Channels/101",
       });
     }
@@ -422,7 +429,11 @@ function renderConnectionHints(el, info, mode) {
   if (!el || !info) return;
   const s = info.source || {};
   const originRtsp = s.rtsp_url || info.device_rtsp_masked || "—";
-  let html = `<p class="section-label">Datos de conexión</p>`;
+  let html = "";
+  if (info.preview) {
+    html += `<p class="hint">Vista previa con los datos del formulario (sin guardar aún).</p>`;
+  }
+  html += `<p class="section-label">Datos de conexión</p>`;
   html += `<div class="conn-block"><strong>Origen cámara (RTSP)</strong><pre class="conn-pre">${escapeHtml(
     originRtsp
   )}</pre><p class="hint">${escapeHtml(s.mpv || "")}</p></div>`;
@@ -451,26 +462,118 @@ function renderConnectionHints(el, info, mode) {
     const w = info.webrtc || {};
     html += `<div class="conn-block"><strong>WebRTC (visor WHEP)</strong><pre class="conn-pre">POST ${escapeHtml(
       w.whep_offer_url || "—"
-    )}\nContent-Type: application/json\nBody: {"sdp":"&lt;offer&gt;","type":"offer"}\nAuthorization: Bearer &lt;token del login&gt;\n\nVisor en panel: ${escapeHtml(
+    )}\nContent-Type: application/json\nBody: {"sdp":"&lt;offer&gt;","type":"offer"}\n\nVisor: ${escapeHtml(
       w.panel_url || ""
-    )}\nEstado: ${escapeHtml(w.status_url || "")}</pre><p class="hint">${escapeHtml(
-      w.hint_panel || ""
-    )} ${escapeHtml(w.hint_external || "")}</p></div>`;
+    )}\nEstado: ${escapeHtml(w.status_url || "")}</pre>`;
+    if (w.curl_probe) {
+      html += `<p class="section-label">Probar en terminal (curl)</p><pre class="conn-pre conn-curl">${escapeHtml(
+        w.curl_probe
+      )}</pre>`;
+    }
+    html += `<p class="hint">${escapeHtml(w.hint_panel || "")} ${escapeHtml(
+      w.hint_external || ""
+    )}</p></div>`;
   }
   el.innerHTML = html;
 }
 
-async function loadAccessInfo(cameraId, card) {
+function debounce(fn, ms = 350) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+function setChannelBusy(card, busy, message = "Conectando…") {
+  if (!card) return;
+  const btn = card.querySelector("[data-toggle-bc]");
+  let overlay = card.querySelector(".channel-busy");
+  if (busy) {
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.className = "channel-busy";
+      overlay.innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="busy-msg"></span>';
+      card.appendChild(overlay);
+    }
+    overlay.querySelector(".busy-msg").textContent = message;
+    card.classList.add("is-busy");
+    card.querySelectorAll("input, select, button").forEach((el) => {
+      if (el === btn) return;
+      el.disabled = true;
+    });
+    if (btn) {
+      if (!btn.dataset.prevText) btn.dataset.prevText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = message;
+      btn.classList.add("loading");
+    }
+  } else {
+    card.classList.remove("is-busy");
+    overlay?.remove();
+    card.querySelectorAll("input, select, button").forEach((el) => {
+      if (el.hasAttribute("data-del-ch")) return;
+      el.disabled = false;
+    });
+    const playbackBtn = card.querySelector("[data-playback-test]");
+    if (playbackBtn && card.dataset.broadcastOn !== "1") playbackBtn.disabled = true;
+    if (btn) {
+      btn.classList.remove("loading");
+      btn.disabled = false;
+      if (btn.dataset.prevText) {
+        btn.textContent = btn.dataset.prevText;
+        delete btn.dataset.prevText;
+      }
+    }
+  }
+}
+
+async function loadAccessInfo(cameraId, card, device, cam) {
   const el = card?.querySelector(".conn-hints");
   if (!el) return;
+  const mode =
+    card.querySelector(`input[name="bc-mode-${cameraId}"]:checked`)?.value || "rtsp";
+  const useOverride = card.querySelector("[data-bc-override]")?.checked;
+  el.innerHTML = '<p class="hint conn-loading">Actualizando datos de conexión…</p>';
   try {
-    const info = await api(`/api/v1/cameras/${cameraId}/access-info`);
-    const mode =
-      card.querySelector(`input[name="bc-mode-${cameraId}"]:checked`)?.value || "rtsp";
+    let info;
+    if (useOverride && device && cam) {
+      const ov = readBroadcastOverride(device, cam, card);
+      info = await api(`/api/v1/cameras/${cameraId}/access-info/preview`, {
+        method: "POST",
+        json: {
+          host: ov.host,
+          port: ov.port,
+          username: ov.username,
+          password: ov.password ?? "",
+          brand: ov.brand,
+          channel: ov.channel,
+        },
+      });
+    } else {
+      info = await api(`/api/v1/cameras/${cameraId}/access-info`);
+    }
     renderConnectionHints(el, info, mode);
   } catch (err) {
-    el.innerHTML = `<p class="hint">${escapeHtml(err.message)}</p>`;
+    el.innerHTML = `<p class="hint err-text">${escapeHtml(err.message)}</p>`;
   }
+}
+
+function bindOverrideAccessInfoRefresh(card, device, cam, cameraId) {
+  const refresh = debounce(() => loadAccessInfo(cameraId, card, device, cam));
+  const overrideCb = card.querySelector("[data-bc-override]");
+  overrideCb?.addEventListener("change", (e) => {
+    card.querySelector(".override-fields")?.classList.toggle("hidden", !e.target.checked);
+    loadAccessInfo(cameraId, card, device, cam);
+  });
+  card.querySelectorAll(".ov-host, .ov-port, .ov-user, .ov-pass, .ov-channel").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      if (overrideCb?.checked) refresh();
+    });
+  });
+  card.querySelector(".ov-brand")?.addEventListener("change", () => {
+    if (overrideCb?.checked) refresh();
+  });
 }
 
 function readBroadcastOverride(device, cam, card) {
@@ -541,14 +644,12 @@ function renderChannelPanel(device, chState, root) {
     <button type="button" class="btn-sm danger" data-del-ch="">Eliminar este canal</button>
   `;
 
-  card.querySelector("[data-bc-override]")?.addEventListener("change", (e) => {
-    card.querySelector(".override-fields")?.classList.toggle("hidden", !e.target.checked);
-  });
+  bindOverrideAccessInfoRefresh(card, device, cam, cameraId);
   card.querySelectorAll(`input[name="bc-mode-${cameraId}"]`).forEach((r) => {
     r.addEventListener("change", () => {
       device.broadcastMode = r.value;
       updateBroadcastModeUi(card, r.value);
-      loadAccessInfo(cameraId, card);
+      loadAccessInfo(cameraId, card, device, cam);
     });
   });
   updateBroadcastModeUi(card, mode);
@@ -559,8 +660,8 @@ function renderChannelPanel(device, chState, root) {
     testPlaybackBuffer(cameraId, card)
   );
   card.querySelector("[data-del-ch]")?.addEventListener("click", () => deleteCamera(cameraId));
-  refreshChannelStatus(cameraId, card);
-  loadAccessInfo(cameraId, card);
+  refreshChannelStatus(cameraId, card, device, cam);
+  loadAccessInfo(cameraId, card, device, cam);
   root.appendChild(card);
 }
 
@@ -803,7 +904,7 @@ function isBroadcastRunning(st) {
   );
 }
 
-async function refreshChannelStatus(cameraId, card) {
+async function refreshChannelStatus(cameraId, card, device, cam) {
   const badge = card.querySelector(".ch-status");
   const toggle = card.querySelector("[data-toggle-bc]");
   const playbackBtn = card.querySelector("[data-playback-test]");
@@ -838,7 +939,7 @@ async function refreshChannelStatus(cameraId, card) {
       playbackBtn.disabled = !bcOn || span < PLAYBACK_OFFSET_SEC * 0.85;
     }
     card.dataset.broadcastOn = bcOn ? "1" : "0";
-    loadAccessInfo(cameraId, card);
+    if (device && cam) loadAccessInfo(cameraId, card, device, cam);
   } catch {
     badge.innerHTML = '<span class="badge muted">Sin guardar / inactiva</span>';
     if (toggle) {
@@ -847,6 +948,15 @@ async function refreshChannelStatus(cameraId, card) {
     }
     if (playbackBtn) playbackBtn.disabled = true;
   }
+}
+
+function syncBroadcastModeRadios(card, cameraId, mode) {
+  if (!card) return;
+  const rtsp = card.querySelector(`input[name="bc-mode-${cameraId}"][value="rtsp"]`);
+  const webrtc = card.querySelector(`input[name="bc-mode-${cameraId}"][value="webrtc"]`);
+  if (rtsp) rtsp.checked = mode === "rtsp";
+  if (webrtc) webrtc.checked = mode === "webrtc";
+  updateBroadcastModeUi(card, mode);
 }
 
 async function waitForIngest(cameraId, maxMs = 15000) {
@@ -870,6 +980,7 @@ async function toggleBroadcast(device, cam, card) {
   device.broadcastMode = mode;
   const isOn = card.dataset.broadcastOn === "1";
 
+  setChannelBusy(card, true, isOn ? "Desactivando…" : "Activando broadcast…");
   try {
     if (!isOn) {
       const ov = readBroadcastOverride(device, cam, card);
@@ -887,12 +998,25 @@ async function toggleBroadcast(device, cam, card) {
         { broadcastOn: true, broadcastMode: mode }
       );
       payload.camera_id = cameraId;
-      await api(`/api/v1/cameras/${cameraId}`, { method: "PUT", json: payload });
+      const savedCam = await api(`/api/v1/cameras/${cameraId}`, {
+        method: "PUT",
+        json: payload,
+      });
+      const cacheIdx = camerasCache.findIndex((c) => c.camera_id === cameraId);
+      if (cacheIdx >= 0) camerasCache[cacheIdx] = savedCam;
+      else camerasCache.push(savedCam);
+      const chEntry = device.channels.find(
+        (c) => c.camera?.camera_id === cameraId || c.channel === cam.source?.channel
+      );
+      if (chEntry) chEntry.camera = savedCam;
+      device.broadcastMode = mode;
+      upsertDeviceDraft({ ...device, broadcastMode: mode });
 
       const url =
         mode === "webrtc"
           ? `/api/v1/cameras/${cameraId}/broadcast/start?mode=webrtc`
           : `/api/v1/cameras/${cameraId}/broadcast/start`;
+      setChannelBusy(card, true, "Arrancando ingesta…");
       const startRes = await api(url, { method: "POST" });
       if (mode === "webrtc" && startRes?.ingest_ready === false) {
         await waitForIngest(cameraId);
@@ -901,6 +1025,7 @@ async function toggleBroadcast(device, cam, card) {
       }
 
       if (mode === "webrtc") {
+        setChannelBusy(card, true, "Conectando WebRTC…");
         const video = card.querySelector("video");
         await KanvisWebRtcViewer.connect(cameraId, api, {
           video,
@@ -913,7 +1038,7 @@ async function toggleBroadcast(device, cam, card) {
       toast("Broadcast activado — rellenando búfer…");
       let polls = 0;
       const pollId = setInterval(() => {
-        refreshChannelStatus(cameraId, card);
+        refreshChannelStatus(cameraId, card, device, cam);
         if (++polls >= 20) clearInterval(pollId);
       }, 2000);
     } else {
@@ -940,14 +1065,23 @@ async function toggleBroadcast(device, cam, card) {
         { broadcastOn: false }
       );
       payload.camera_id = cameraId;
-      await api(`/api/v1/cameras/${cameraId}`, { method: "PUT", json: payload });
+      const savedCam = await api(`/api/v1/cameras/${cameraId}`, {
+        method: "PUT",
+        json: payload,
+      });
+      const cacheIdx = camerasCache.findIndex((c) => c.camera_id === cameraId);
+      if (cacheIdx >= 0) camerasCache[cacheIdx] = savedCam;
+      device.broadcastMode = mode;
+      upsertDeviceDraft({ ...device, broadcastMode: mode });
       toast("Broadcast desactivado");
     }
-    await loadCameras();
-    await refreshChannelStatus(cameraId, card);
-    await loadAccessInfo(cameraId, card);
+    syncBroadcastModeRadios(card, cameraId, mode);
+    await refreshChannelStatus(cameraId, card, device, cam);
+    await loadAccessInfo(cameraId, card, device, cam);
   } catch (err) {
     toast(err.message, true);
+  } finally {
+    setChannelBusy(card, false);
   }
 }
 

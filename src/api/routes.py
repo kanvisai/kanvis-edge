@@ -386,26 +386,58 @@ async def camera_rtsp_urls(
     }
 
 
-@router.get("/cameras/{camera_id}/access-info")
-async def camera_access_info(
+class AccessInfoPreviewBody(BaseModel):
+    """Vista previa de URLs de conexión (formulario «otros datos»)."""
+
+    host: str | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
+    username: str | None = None
+    password: str | None = None
+    brand: str | None = None
+    channel: str | None = None
+
+
+def _camera_with_source_overrides(
+    camera: CameraRecord, body: AccessInfoPreviewBody | None
+) -> CameraRecord:
+    if body is None:
+        return camera
+    data = camera.model_dump_for_storage()
+    src = data["source"]
+    changed = False
+    if body.host and body.host.strip():
+        src["host"] = body.host.strip()
+        changed = True
+    if body.port is not None:
+        src["port"] = body.port
+        changed = True
+    if body.username is not None:
+        src["username"] = body.username
+        changed = True
+    if body.password is not None:
+        src["password"] = body.password
+        changed = True
+    if body.brand is not None:
+        src["brand"] = body.brand.strip()
+        changed = True
+    if body.channel is not None and str(body.channel).strip():
+        src["channel"] = str(body.channel).strip()
+        changed = True
+    if not changed:
+        return camera
+    return CameraRecord.from_storage(data)
+
+
+def _build_camera_access_info(
+    camera: CameraRecord,
     camera_id: str,
-    request: Request,
-    repo: Annotated[CameraRepository, Depends(get_repository)],
-    settings: Annotated[AppSettings, Depends(get_app_settings)],
-    relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+    *,
+    api_base: str,
+    lan_ip: str,
+    settings: AppSettings,
+    relay_manager: RelayManager,
+    preview: bool = False,
 ) -> dict:
-    """Datos de conexión para pruebas (RTSP cámara, relay, WebRTC)."""
-    camera = await repo.get(camera_id)
-    if not camera:
-        raise HTTPException(status_code=404, detail="Cámara no encontrada")
-
-    host_header = (request.headers.get("host") or "").strip()
-    if not host_header:
-        host_header = f"127.0.0.1:{settings.edge_api_port}"
-    scheme = request.url.scheme or "http"
-    api_base = f"{scheme}://{host_header}".rstrip("/")
-    lan_ip = settings.ap_ip or "IP_LAN_DEL_EDGE"
-
     device_rtsp = ""
     device_rtsp_masked = ""
     try:
@@ -452,25 +484,43 @@ async def camera_access_info(
         relay_preview = {"error": str(exc)}
 
     relay_block: dict | None = None
-    if camera.output.relay.enabled:
+    if camera.output.relay.enabled and not preview:
         if relay_preview and "error" not in relay_preview:
             relay_block = {"enabled": True, **relay_preview}
         elif relay_preview:
             relay_block = {"enabled": True, **relay_preview}
 
+    whep_url = f"{api_base}/api/v1/webrtc/{camera_id}/offer"
+    status_url = f"{api_base}/api/v1/webrtc/{camera_id}/status"
+    login_url = f"{api_base}/api/v1/webui/login"
+    curl_probe = (
+        f"# 1) Token (usuario/contraseña del panel)\n"
+        f'TOKEN=$(curl -sS -X POST "{login_url}" \\\n'
+        f'  -H "Content-Type: application/json" \\\n'
+        f'  -d \'{{"username":"admin","password":"TU_PASS"}}\' \\\n'
+        f"  | python3 -c \"import sys,json; print(json.load(sys.stdin)['access_token'])\")\n\n"
+        f"# 2) Estado (broadcast WebRTC activo)\n"
+        f'curl -sS -H "Authorization: Bearer $TOKEN" "{status_url}"\n\n'
+        f"# 3) WHEP — POST con SDP offer (genera offer.json con un cliente WebRTC)\n"
+        f'curl -sS -X POST "{whep_url}" \\\n'
+        f'  -H "Authorization: Bearer $TOKEN" \\\n'
+        f'  -H "Content-Type: application/json" \\\n'
+        f"  -d @offer.json"
+    )
     webrtc_block = {
         "enabled": camera.output.webrtc.enabled,
         "mode": camera.output.webrtc.mode,
-        "whep_offer_url": f"{api_base}/api/v1/webrtc/{camera_id}/offer",
+        "whep_offer_url": whep_url,
         "whep_method": "POST",
-        "whep_body": "SDP offer JSON {sdp, type}",
+        "whep_body": '{"sdp":"<offer SDP>","type":"offer"}',
         "panel_url": f"{api_base}/",
         "hint_panel": "Visor en este panel (modo WebRTC + Activar broadcast).",
         "hint_external": (
             "Desde fuera: túnel SSH al puerto API o port forwarding; "
             "cabecera Authorization: Bearer <token del login>"
         ),
-        "status_url": f"{api_base}/api/v1/webrtc/{camera_id}/status",
+        "status_url": status_url,
+        "curl_probe": curl_probe,
     }
 
     store = settings.camera_store_backend.value
@@ -480,7 +530,7 @@ async def camera_access_info(
         else str(settings.resolved_cameras_json)
     )
 
-    return {
+    out: dict = {
         "camera_id": camera_id,
         "label": camera.label,
         "storage": {"backend": store, "path": store_path},
@@ -491,6 +541,68 @@ async def camera_access_info(
         "webrtc": webrtc_block,
         "broadcast_status_url": f"{api_base}/api/v1/cameras/{camera_id}/broadcast/status",
     }
+    if preview:
+        out["preview"] = True
+    return out
+
+
+def _access_info_context(request: Request, settings: AppSettings) -> tuple[str, str]:
+    host_header = (request.headers.get("host") or "").strip()
+    if not host_header:
+        host_header = f"127.0.0.1:{settings.edge_api_port}"
+    scheme = request.url.scheme or "http"
+    api_base = f"{scheme}://{host_header}".rstrip("/")
+    lan_ip = settings.ap_ip or "IP_LAN_DEL_EDGE"
+    return api_base, lan_ip
+
+
+@router.get("/cameras/{camera_id}/access-info")
+async def camera_access_info(
+    camera_id: str,
+    request: Request,
+    repo: Annotated[CameraRepository, Depends(get_repository)],
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+    relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+) -> dict:
+    """Datos de conexión para pruebas (RTSP cámara, relay, WebRTC)."""
+    camera = await repo.get(camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail="Cámara no encontrada")
+    api_base, lan_ip = _access_info_context(request, settings)
+    return _build_camera_access_info(
+        camera,
+        camera_id,
+        api_base=api_base,
+        lan_ip=lan_ip,
+        settings=settings,
+        relay_manager=relay_manager,
+    )
+
+
+@router.post("/cameras/{camera_id}/access-info/preview")
+async def camera_access_info_preview(
+    camera_id: str,
+    body: AccessInfoPreviewBody,
+    request: Request,
+    repo: Annotated[CameraRepository, Depends(get_repository)],
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+    relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+) -> dict:
+    """Vista previa de URLs con IP/credenciales del formulario (sin guardar)."""
+    camera = await repo.get(camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail="Cámara no encontrada")
+    preview_cam = _camera_with_source_overrides(camera, body)
+    api_base, lan_ip = _access_info_context(request, settings)
+    return _build_camera_access_info(
+        preview_cam,
+        camera_id,
+        api_base=api_base,
+        lan_ip=lan_ip,
+        settings=settings,
+        relay_manager=relay_manager,
+        preview=True,
+    )
 
 
 @router.get("/cameras")
@@ -527,9 +639,17 @@ async def update_camera(
     data = existing.model_dump_for_storage()
     patch = incoming.model_dump_for_storage()
     patch["camera_id"] = camera_id
-    for key in ("source", "output", "buffer"):
+    for key in ("source", "buffer"):
         if patch.get(key):
             data[key] = {**data.get(key, {}), **patch[key]}
+    if patch.get("output"):
+        existing_out = data.get("output", {})
+        patch_out = patch["output"]
+        merged_out = {**existing_out, **patch_out}
+        for sub in ("relay", "webrtc", "gateway"):
+            if sub in patch_out:
+                merged_out[sub] = {**existing_out.get(sub, {}), **patch_out[sub]}
+        data["output"] = merged_out
     for key in ("enabled", "label"):
         if key in patch:
             data[key] = patch[key]
