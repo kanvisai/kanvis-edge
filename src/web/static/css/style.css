@@ -399,6 +399,35 @@ button:disabled {
   background: rgba(248, 113, 113, 0.08);
 }
 
+.probe-codec-row {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  background: rgba(35, 134, 54, 0.12);
+  border: 1px solid rgba(61, 214, 140, 0.35);
+}
+
+.probe-codec-badge {
+  display: block;
+  font-weight: 700;
+  font-size: 1rem;
+  color: #3dd68c;
+}
+
+.probe-codec-badge.hevc {
+  color: #f0b429;
+}
+
+.probe-codec-badge.h264 {
+  color: #3dd68c;
+}
+
+.probe-codec-rec {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+}
+
 .hint.err-text {
   color: var(--err);
 }

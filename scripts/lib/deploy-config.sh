@@ -97,3 +97,32 @@ deploy_wait_for_user_config() {
   echo ""
   read -r -p "Pulsa ENTER cuando hayas guardado los cambios para continuar (Ctrl+C para abortar)… " _
 }
+
+# Datos del guardia que NO deben sobrescribirse al sincronizar código (deploy/install).
+DEPLOY_RSYNC_EXCLUDES=(
+  --exclude '.venv'
+  --exclude '__pycache__'
+  --exclude '.git'
+  --exclude '.env'
+  --exclude 'config/cameras.json'
+  --exclude 'config/cameras.db'
+  --exclude 'config/operating_schedule.json'
+  --exclude 'config/data/'
+)
+
+deploy_seed_config_if_missing() {
+  local install_root="$1" repo_root="$2"
+  local cfg="${install_root}/config"
+  mkdir -p "${cfg}/data" "${cfg}/brands"
+  if [[ ! -f "${cfg}/cameras.json" ]]; then
+    if [[ -f "${repo_root}/config/cameras.json" ]]; then
+      cp "${repo_root}/config/cameras.json" "${cfg}/cameras.json"
+    else
+      echo '[]' > "${cfg}/cameras.json"
+    fi
+    ui_ok "Creado config/cameras.json (inventario vacío o ejemplo)"
+  fi
+  if [[ ! -f "${cfg}/operating_schedule.json" ]] && [[ -f "${repo_root}/config/operating_schedule.example.json" ]]; then
+    cp "${repo_root}/config/operating_schedule.example.json" "${cfg}/operating_schedule.json"
+  fi
+}

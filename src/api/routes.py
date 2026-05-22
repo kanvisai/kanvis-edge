@@ -98,8 +98,10 @@ async def health(request: Request) -> dict:
             "rtsp_probe_tools": True,
             "rtsp_probe_paths": [
                 "/api/v1/tools/rtsp-probe",
+                "/api/v1/tools/rtsp-probe-meta",
                 "/api/v1/rtsp/probe",
             ],
+            "rtsp_probe_codec": True,
             "webrtc_peer_config": WEBRTC_PEER_CONFIG_VERSION,
         },
     }
@@ -322,15 +324,11 @@ class CameraProbeRequest(BaseModel):
     transport: str = "tcp"
 
 
-async def _probe_camera_rtsp_impl(
-    body: CameraProbeRequest,
-    settings: AppSettings,
-) -> Response:
-    """Captura un frame JPEG desde RTSP con los datos del formulario."""
+def _probe_record_from_body(body: CameraProbeRequest) -> CameraRecord:
     host = body.host.strip()
     if not host:
         raise HTTPException(status_code=400, detail="host requerido")
-    record = CameraRecord(
+    return CameraRecord(
         camera_id="probe",
         label="probe",
         enabled=True,
@@ -346,6 +344,46 @@ async def _probe_camera_rtsp_impl(
         output=CameraOutput(),
         buffer=CameraBufferSettings(),
     )
+
+
+async def _probe_rtsp_codec_meta(
+    body: CameraProbeRequest,
+    settings: AppSettings,
+) -> dict:
+    record = _probe_record_from_body(body)
+    try:
+        url = record.rtsp_url(settings=settings)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    transport = record.source.transport or "tcp"
+    tout = settings.snapshot_timeout_sec
+    try:
+        probe_info = await probe_rtsp_stream(
+            url,
+            ffmpeg_path=settings.ffmpeg_path,
+            transport=transport,
+            timeout_sec=tout,
+        )
+    except SnapshotError as exc:
+        return {
+            "ok": False,
+            "codec_detected": False,
+            "error": str(exc),
+            "rtsp_url_masked": _mask_url(url),
+        }
+    out = probe_info.as_dict()
+    out["ok"] = True
+    out["codec_detected"] = bool(probe_info.codec_name)
+    out["rtsp_url_masked"] = _mask_url(url)
+    return out
+
+
+async def _probe_camera_rtsp_impl(
+    body: CameraProbeRequest,
+    settings: AppSettings,
+) -> Response:
+    """Captura un frame JPEG desde RTSP con los datos del formulario."""
+    record = _probe_record_from_body(body)
     try:
         url = record.rtsp_url(settings=settings)
     except (FileNotFoundError, ValueError, KeyError) as exc:
@@ -361,7 +399,7 @@ async def _probe_camera_rtsp_impl(
             timeout_sec=tout,
         )
     except SnapshotError as exc:
-        logger.warning("ffprobe en probe RTSP: %s", exc)
+        logger.warning("Análisis códec RTSP: %s", exc)
     try:
         jpeg = await capture_jpeg_from_rtsp(
             url,
@@ -391,6 +429,23 @@ async def _probe_camera_rtsp_impl(
         if dim:
             headers["X-Kanvis-Video-Resolution"] = dim.strip()
     return Response(content=jpeg, media_type="image/jpeg", headers=headers)
+
+
+@router.post("/tools/rtsp-probe-meta")
+async def probe_camera_rtsp_meta(
+    body: CameraProbeRequest,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> dict:
+    """Códec y modo broadcast sugerido (JSON, sin capturar JPEG)."""
+    return await _probe_rtsp_codec_meta(body, settings)
+
+
+@router.post("/rtsp/probe-meta")
+async def probe_camera_rtsp_meta_alias(
+    body: CameraProbeRequest,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> dict:
+    return await _probe_rtsp_codec_meta(body, settings)
 
 
 @router.post("/tools/rtsp-probe")

@@ -19,6 +19,21 @@ class RtspStreamProbe:
     recommendation: str = "rtsp"
     recommendation_label: str = ""
 
+    def as_dict(self) -> dict:
+        return {
+            "codec_name": self.codec_name,
+            "codec_long_name": self.codec_long_name,
+            "width": self.width,
+            "height": self.height,
+            "resolution": (
+                f"{self.width}×{self.height}"
+                if self.width and self.height
+                else None
+            ),
+            "recommendation": self.recommendation,
+            "recommendation_label": self.recommendation_label,
+        }
+
 
 def ffprobe_path_from_ffmpeg(ffmpeg_path: str) -> str:
     p = (ffmpeg_path or "ffmpeg").strip()
@@ -109,6 +124,44 @@ def _probe_sync(
     )
 
 
+def _probe_pyav_sync(url: str, transport: str, timeout_sec: float) -> RtspStreamProbe:
+    import av
+
+    container = None
+    try:
+        usec = max(1, int(timeout_sec * 1_000_000))
+        container = av.open(
+            url,
+            options={
+                "rtsp_transport": transport or "tcp",
+                "stimeout": str(usec),
+            },
+        )
+        stream = container.streams.video[0]
+        codec = (getattr(stream.codec, "name", None) or "").strip()
+        if not codec:
+            raise SnapshotError("PyAV no obtuvo códec de vídeo")
+        mode, label = broadcast_recommendation(codec)
+        w = getattr(stream.codec_context, "width", None) or stream.width
+        h = getattr(stream.codec_context, "height", None) or stream.height
+        return RtspStreamProbe(
+            codec_name=codec,
+            codec_long_name=codec,
+            width=int(w) if w else None,
+            height=int(h) if h else None,
+            recommendation=mode,
+            recommendation_label=label + " (detectado con PyAV)",
+        )
+    except av.AVError as exc:
+        raise SnapshotError(f"PyAV: {exc}") from exc
+    finally:
+        if container is not None:
+            try:
+                container.close()
+            except Exception:
+                pass
+
+
 async def probe_rtsp_stream(
     url: str,
     ffmpeg_path: str = "ffmpeg",
@@ -116,6 +169,11 @@ async def probe_rtsp_stream(
     timeout_sec: float = 10.0,
 ) -> RtspStreamProbe:
     ffprobe = ffprobe_path_from_ffmpeg(ffmpeg_path)
-    return await asyncio.to_thread(
-        _probe_sync, url, ffprobe, transport, timeout_sec
-    )
+    try:
+        return await asyncio.to_thread(
+            _probe_sync, url, ffprobe, transport, timeout_sec
+        )
+    except SnapshotError:
+        return await asyncio.to_thread(
+            _probe_pyav_sync, url, transport, timeout_sec
+        )

@@ -374,6 +374,48 @@ function buildCameraPayload(device, channel, label, opts = {}) {
   };
 }
 
+function showProbeCodecBadge(panel, probe) {
+  const row = panel?.querySelector("[data-probe-codec-row]");
+  const badge = panel?.querySelector("[data-probe-codec-badge]");
+  const rec = panel?.querySelector("[data-probe-codec-rec]");
+  if (!row || !badge) return;
+  if (!probe?.codec) {
+    row.classList.add("hidden");
+    badge.textContent = "";
+    if (rec) rec.textContent = probe?.metaError || "";
+    return;
+  }
+  row.classList.remove("hidden");
+  const reso = probe.resolution ? ` · ${probe.resolution}` : "";
+  badge.textContent = `Códec: ${probe.codec.toUpperCase()}${reso}`;
+  badge.classList.toggle("hevc", /hevc|h265|hev/i.test(probe.codec));
+  badge.classList.toggle("h264", /h264|avc/i.test(probe.codec));
+  if (rec) {
+    const mode =
+      probe.recommendation === "webrtc"
+        ? "→ Usa broadcast WebRTC"
+        : probe.recommendation === "rtsp"
+          ? "→ Usa broadcast RTSP (relay)"
+          : "";
+    rec.textContent = [probe.hint, mode].filter(Boolean).join(" ");
+  }
+}
+
+async function fetchProbeCodecMeta(body) {
+  const paths = ["/api/v1/tools/rtsp-probe-meta", "/api/v1/rtsp/probe-meta"];
+  let lastErr;
+  for (const path of paths) {
+    try {
+      return await api(path, { method: "POST", json: body });
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err.message || "");
+      if (!msg.includes("404") && !msg.includes("405")) throw err;
+    }
+  }
+  return { ok: false, codec_detected: false, error: lastErr?.message || "meta no disponible" };
+}
+
 async function probeDevice(device, channel) {
   const ch = String(channel ?? device.probeChannel ?? "").trim() || "101";
   device.probeChannel = ch;
@@ -389,16 +431,18 @@ async function probeDevice(device, channel) {
   if (!body.brand) {
     throw new Error("Elige la marca (Annke, etc.) para armar la URL RTSP");
   }
+
+  const meta = await fetchProbeCodecMeta(body);
   const headers = { "Content-Type": "application/json" };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  const paths = [
+  const imagePaths = [
     "/api/v1/tools/rtsp-probe",
     "/api/v1/rtsp/probe",
     "/api/v1/cameras/probe",
   ];
   let lastErr;
-  for (const path of paths) {
+  for (const path of imagePaths) {
     try {
       const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
       if (res.status === 401) {
@@ -414,16 +458,29 @@ async function probeDevice(device, channel) {
         throw new Error(detail ? `${detail} (HTTP ${res.status})` : `HTTP ${res.status}`);
       }
       const blob = await res.blob();
-      const codec = res.headers.get("X-Kanvis-Video-Codec") || "";
-      const rec = res.headers.get("X-Kanvis-Broadcast-Recommendation") || "";
-      const hint = res.headers.get("X-Kanvis-Codec-Hint") || "";
-      const reso = res.headers.get("X-Kanvis-Video-Resolution") || "";
+      const codec =
+        meta.codec_name ||
+        res.headers.get("X-Kanvis-Video-Codec") ||
+        "";
+      const rec =
+        meta.recommendation ||
+        res.headers.get("X-Kanvis-Broadcast-Recommendation") ||
+        "";
+      const hint =
+        meta.recommendation_label ||
+        res.headers.get("X-Kanvis-Codec-Hint") ||
+        "";
+      const reso =
+        meta.resolution ||
+        res.headers.get("X-Kanvis-Video-Resolution") ||
+        "";
       return {
         objectUrl: URL.createObjectURL(blob),
         codec,
         recommendation: rec,
         hint,
         resolution: reso,
+        metaError: meta.ok ? "" : meta.error || "",
       };
     } catch (err) {
       lastErr = err;
@@ -924,6 +981,10 @@ function renderDevicePanel(device) {
       <div class="probe-preview">
         <p class="probe-placeholder">Prueba la URL RTSP antes de guardar</p>
       </div>
+      <div class="probe-codec-row hidden" data-probe-codec-row="">
+        <span class="probe-codec-badge" data-probe-codec-badge=""></span>
+        <span class="probe-codec-rec hint" data-probe-codec-rec=""></span>
+      </div>
       <button type="button" class="btn-block secondary" data-probe="">Probar conexión</button>
       <pre class="action-msg hidden" data-probe-msg="" aria-live="polite"></pre>
       <p class="probe-net hint">La prueba RTSP la hace el <strong>servidor Kanvis</strong> (no el navegador). Debe poder abrir <code>host:puerto</code> desde ese equipo.</p>
@@ -992,7 +1053,8 @@ function renderDevicePanel(device) {
     if (!device.host?.trim()) {
       return setActionMsg(msg, "Indica la IP", "err");
     }
-    setActionMsg(msg, "Capturando frame RTSP…");
+    setActionMsg(msg, "Analizando códec y capturando frame…");
+    panel.querySelector("[data-probe-codec-row]")?.classList.add("hidden");
     try {
       const probe = await probeDevice(device, device.probeChannel);
       preview.innerHTML = `<img src="${probe.objectUrl}" alt="Vista previa" />`;
@@ -1001,14 +1063,17 @@ function renderDevicePanel(device) {
       if (probe.recommendation === "webrtc" || probe.recommendation === "rtsp") {
         device.broadcastMode = probe.recommendation;
       }
+      showProbeCodecBadge(panel, probe);
       const codecLine = probe.codec
-        ? `Códec vídeo: ${probe.codec}${probe.resolution ? ` (${probe.resolution})` : ""}.`
-        : "Códec: no detectado (instala ffprobe).";
+        ? `Códec: ${probe.codec}${probe.resolution ? ` (${probe.resolution})` : ""}.`
+        : probe.metaError
+          ? `Códec no detectado: ${probe.metaError}`
+          : "Códec no detectado.";
       const recLine = probe.hint || "";
       setActionMsg(
         msg,
-        `RTSP OK (canal ${device.probeChannel || "—"}). ${codecLine} ${recLine} Puedes guardar la cámara.`,
-        "ok"
+        `RTSP OK (canal ${device.probeChannel || "—"}). ${codecLine} ${recLine} Guarda la cámara cuando quieras.`,
+        probe.codec ? "ok" : "err"
       );
       const oldKey = device.key;
       device.key = hostKey(device.host);

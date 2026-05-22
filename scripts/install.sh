@@ -16,6 +16,8 @@ source "${SCRIPT_DIR}/lib/distro.sh"
 source "${SCRIPT_DIR}/lib/preflight-deps.sh"
 # shellcheck source=lib/install-access.sh
 source "${SCRIPT_DIR}/lib/install-access.sh"
+# shellcheck source=lib/deploy-config.sh
+source "${SCRIPT_DIR}/lib/deploy-config.sh"
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   ui_banner "Kanvis Edge — Instalador"
@@ -59,9 +61,8 @@ esac
 ui_section "Copiando aplicación a ${INSTALL_ROOT}"
 mkdir -p "$INSTALL_ROOT" /etc/kanvis-edge
 ui_detail "Sincronizando archivos del repositorio…"
-rsync -a --delete \
-  --exclude '.venv' --exclude '__pycache__' --exclude '.git' \
-  "$REPO_ROOT/" "$INSTALL_ROOT/"
+rsync -a --delete "${DEPLOY_RSYNC_EXCLUDES[@]}" "$REPO_ROOT/" "$INSTALL_ROOT/"
+deploy_seed_config_if_missing "$INSTALL_ROOT" "$REPO_ROOT"
 ui_ok "Archivos copiados"
 
 ui_section "Ficheros de configuración (un solo fichero en hardware)"
@@ -75,6 +76,7 @@ ln -sfn "$ENV_SYSTEM" "${INSTALL_ROOT}/.env"
 ui_ok "Enlace ${INSTALL_ROOT}/.env → ${ENV_SYSTEM}"
 ui_detail "Edita solo: sudo nano ${ENV_SYSTEM}"
 mkdir -p "${INSTALL_ROOT}/config/data" "${INSTALL_ROOT}/config/brands"
+# cameras.json / horario: solo deploy_seed_config_if_missing (no pisar en reinstall)
 
 ui_section "Contraseña usuario Linux (kanvis)"
 ui_detail "Puedes definirla ANTES del install en el clone:"

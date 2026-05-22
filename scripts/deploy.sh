@@ -57,9 +57,9 @@ ui_section "Sincronizando configuración desde el repositorio (opcional)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 if [[ -f "${REPO_ROOT}/src/main.py" ]]; then
   ui_detail "Actualizando código en ${INSTALL_ROOT}…"
-  rsync -a \
-    --exclude '.venv' --exclude '__pycache__' --exclude '.git' \
-    "${REPO_ROOT}/" "${INSTALL_ROOT}/"
+  ui_detail "No se tocan cameras.json, cameras.db ni horario (datos del guardia)"
+  rsync -a "${DEPLOY_RSYNC_EXCLUDES[@]}" "${REPO_ROOT}/" "${INSTALL_ROOT}/"
+  deploy_seed_config_if_missing "$INSTALL_ROOT" "$REPO_ROOT"
   chown -R kanvis:kanvis "${INSTALL_ROOT}" 2>/dev/null || chown -R "${KANVIS_USER:-kanvis}:${KANVIS_USER:-kanvis}" "${INSTALL_ROOT}"
   find "${INSTALL_ROOT}/src" -type d -name __pycache__ -print0 2>/dev/null \
     | xargs -0 rm -rf 2>/dev/null || true
@@ -138,6 +138,7 @@ echo ""
 echo -e "  ${UI_GREEN}Login panel:${UI_NC} usuario ${UI_BOLD}${WEB_USER}${UI_NC} + WEBUI_PASSWORD (.env)"
 echo -e "  ${UI_GREEN}WiFi instalación:${UI_NC} kanvis-${DEVICE_ID} (si NETWORK_MODE incluye AP)"
 echo ""
+ui_detail "Cámaras guardadas en ${INSTALL_ROOT}/config/cameras.json (no se borran en deploy)."
 ui_detail "Añade cámaras en la pestaña «Cámaras», elige marca (annke, …) y prueba en «Probar»."
 ui_detail "Logs: journalctl -u kanvis-edge -f"
 echo ""
