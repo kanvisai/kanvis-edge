@@ -175,7 +175,13 @@ setup_ap() {
   if command -v dnsmasq &>/dev/null; then
     prepare_dnsmasq_for_ap
     pkill -f "dnsmasq.*${DNSMASQ_CONF}" 2>/dev/null || true
-    if ! dnsmasq -C "$DNSMASQ_CONF" -x "${STATE_DIR}/dnsmasq.pid"; then
+    if ! dnsmasq --test -C "$DNSMASQ_CONF" >/dev/null 2>&1; then
+      log "ERROR: dnsmasq conf inválida:"
+      dnsmasq --test -C "$DNSMASQ_CONF" 2>&1 | head -5 >&2 || true
+      exit 1
+    fi
+    # port=0 desactiva DNS; en algunas versiones no es válido dentro del .conf
+    if ! dnsmasq -C "$DNSMASQ_CONF" --port=0 -x "${STATE_DIR}/dnsmasq.pid"; then
       log "ERROR: dnsmasq no arrancó (revisa journalctl -u kanvis-network). Si persiste puerto 53: systemctl status systemd-resolved"
       exit 1
     fi

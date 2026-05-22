@@ -1,8 +1,6 @@
-# Kanvis Edge — solo DHCP en el AP (sin servidor DNS en :53)
+# Kanvis Edge — solo DHCP en el AP (sin DNS; --port=0 en la línea de comandos)
 interface=@WLAN_INTERFACE@
 bind-interfaces
 except-interface=lo
-port=0
 dhcp-range=@DHCP_START@,@DHCP_END@,12h
-dhcp-option=option:router,@AP_IP@
-log-dhcp
+dhcp-option=3,@AP_IP@
