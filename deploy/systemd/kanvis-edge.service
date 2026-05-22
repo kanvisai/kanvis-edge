@@ -20,12 +20,8 @@ TimeoutStartSec=120
 TimeoutStopSec=30
 LimitNOFILE=65536
 
-# Hardening: /opt/kanvis-edge completo escribible (venv, config, logs de app)
-NoNewPrivileges=true
-ProtectSystem=full
-ProtectHome=true
-ReadWritePaths=/opt/kanvis-edge
-PrivateTmp=true
+# Sin ProtectSystem/ProtectHome/PrivateTmp: en algunos kernels/sistemas el servicio
+# falla al arrancar con status=226/NAMESPACE antes de ejecutar Python.
 
 [Install]
 WantedBy=multi-user.target

@@ -388,7 +388,7 @@ EDGE_API_PORT=8000
 
 Si es `127.0.0.1`, el panel solo funciona en el propio cacharro, no desde el móvil en el AP.
 
-4. **systemd** (fallos por hardening): actualiza la unidad y recarga:
+4. **systemd `226/NAMESPACE`**: el sandbox (`ProtectSystem`, `PrivateTmp`, …) impide arrancar en algunos equipos. Usa la unidad sin esas líneas:
 
 ```bash
 sudo cp /opt/kanvis-edge/deploy/systemd/kanvis-edge.service /etc/systemd/system/
@@ -417,6 +417,7 @@ journalctl -u kanvis-edge -n 50 --no-pager
 | `WLAN_INTERFACE` incorrecta | `ip link` → poner nombre real en `/etc/kanvis-edge/env` |
 | Panel no abre / móvil en AP sin respuesta | Ver sección **Panel no carga** abajo |
 | Deploy: «La API no responde» | Es la API **local** (`kanvis-edge`), no el backend nube. `journalctl -u kanvis-edge -n 50` |
+| `status=226/NAMESPACE` en kanvis-edge | Actualiza `kanvis-edge.service` (sin sandbox systemd) y `daemon-reload` |
 | Sin WiFi `kanvis-XXXX` | `iw list` (modo AP); `journalctl -u kanvis-network` |
 | `.env` y `/etc/.../env` distintos | Un solo fichero: edita `/etc/kanvis-edge/env`; verifica el enlace en `/opt` |
 | Línea suelta en env → `command not found` | Cada línea debe ser `CLAVE=valor` (tokens sin `CLOUD_ACCESS_TOKEN=` rompen scripts) |
