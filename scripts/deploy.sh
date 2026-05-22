@@ -61,6 +61,8 @@ if [[ -f "${REPO_ROOT}/src/main.py" ]]; then
     --exclude '.venv' --exclude '__pycache__' --exclude '.git' \
     "${REPO_ROOT}/" "${INSTALL_ROOT}/"
   chown -R kanvis:kanvis "${INSTALL_ROOT}" 2>/dev/null || chown -R "${KANVIS_USER:-kanvis}:${KANVIS_USER:-kanvis}" "${INSTALL_ROOT}"
+  find "${INSTALL_ROOT}/src" -type d -name __pycache__ -print0 2>/dev/null \
+    | xargs -0 rm -rf 2>/dev/null || true
   ui_ok "Código actualizado"
   KANVIS_USER="${KANVIS_USER:-kanvis}"
   if [[ -f "${INSTALL_ROOT}/requirements.txt" ]]; then
@@ -81,8 +83,8 @@ else
   ui_warn "kanvis-network no activo (revisa journalctl -u kanvis-network; puede ser normal en lan_only)"
 fi
 
-ui_section "Arrancando gateway Kanvis Edge"
-systemctl start kanvis-edge.service
+ui_section "Reiniciando gateway Kanvis Edge"
+systemctl restart kanvis-edge.service
 
 ui_section "Comprobando API local (gateway en este cacharro)"
 API_PORT="$(read_env_var EDGE_API_PORT "$ENV_SYSTEM" "$APP_ENV" 2>/dev/null || echo 8000)"

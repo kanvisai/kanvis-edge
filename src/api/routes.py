@@ -79,6 +79,8 @@ def get_schedule_service(request: Request) -> OperatingScheduleService:
 
 @router.get("/health")
 async def health() -> dict:
+    from src.webrtc.publisher import WEBRTC_PEER_CONFIG_VERSION
+
     return {
         "status": "ok",
         "ui_version": "2025-05-broadcast-conn-hints",
@@ -88,6 +90,7 @@ async def health() -> dict:
                 "/api/v1/tools/rtsp-probe",
                 "/api/v1/rtsp/probe",
             ],
+            "webrtc_peer_config": WEBRTC_PEER_CONFIG_VERSION,
         },
     }
 

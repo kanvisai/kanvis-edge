@@ -22,6 +22,9 @@ from src.webrtc.track import H264PacketVideoTrack
 
 logger = logging.getLogger(__name__)
 
+# Marcador para comprobar en /api/v1/health → features.webrtc_rtc_configuration
+WEBRTC_PEER_CONFIG_VERSION = "RTCConfiguration-2025-05"
+
 
 class WebRtcMode(str, Enum):
     WHEP = "whep"
@@ -65,9 +68,10 @@ def _new_peer_connection(camera: CameraRecord) -> RTCPeerConnection:
     configuration = _rtc_configuration(camera)
     if isinstance(configuration, dict):
         raise TypeError(
-            "RTCPeerConnection requiere RTCConfiguration, no dict (actualiza aiortc)"
+            "RTCPeerConnection requiere RTCConfiguration, no dict "
+            f"(código desplegado: {WEBRTC_PEER_CONFIG_VERSION})"
         )
-    return RTCPeerConnection(configuration)
+    return RTCPeerConnection(configuration=configuration)
 
 
 class WebRtcPublisher:
