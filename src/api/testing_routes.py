@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+import asyncio
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
@@ -15,8 +16,8 @@ from src.ingestion.consumer import StreamConsumerManager
 from src.relay.manager import RelayManager
 from src.relay.worker import build_relay_urls
 from src.schedule.service import OperatingScheduleService, require_operating_now
-from src.testing.snapshot import local_listen_url
-from src.testing.snapshot import SnapshotError, capture_jpeg_from_rtsp
+from src.testing.buffer_snapshot import capture_jpeg_from_buffer
+from src.testing.snapshot import SnapshotError, capture_jpeg_from_rtsp, local_listen_url
 
 router = APIRouter(prefix="/api/v1", tags=["testing"])
 
@@ -65,9 +66,29 @@ async def _resolve_camera(
     if active is None:
         raise HTTPException(
             status_code=503,
-            detail="Ingesta no activa; espera a que el consumidor conecte o revisa RTSP",
+            detail="Búfer no activo; activa el broadcast y espera unos segundos",
         )
     return camera, active
+
+
+async def _start_broadcast_ingest(
+    camera_id: str,
+    manager: StreamConsumerManager,
+) -> None:
+    loop = asyncio.get_running_loop()
+    await manager.set_broadcast_ingest(camera_id, True, loop)
+
+
+async def _stop_broadcast_ingest(
+    camera_id: str,
+    manager: StreamConsumerManager,
+    relay_manager: RelayManager,
+) -> None:
+    relay = relay_manager.get_relay(camera_id)
+    if relay and relay.is_running:
+        return
+    loop = asyncio.get_running_loop()
+    await manager.set_broadcast_ingest(camera_id, False, loop)
 
 
 @router.get("/cameras/{camera_id}/snapshot/source")
@@ -150,22 +171,76 @@ async def snapshot_relay(
     )
 
 
+@router.get("/cameras/{camera_id}/snapshot/buffer")
+async def snapshot_buffer(
+    camera_id: str,
+    manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
+    offset_sec: float = Query(default=6.0, ge=1.0, le=120.0),
+) -> Response:
+    """Frame JPEG del búfer RAM (p. ej. hace 6 s) para validar playback."""
+    require_operating_now(schedule_svc)
+    buffer = manager.get_buffer(camera_id)
+    if buffer is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Sin búfer; activa broadcast y espera al menos el offset en segundos",
+        )
+    span = buffer.span_seconds()
+    if span < offset_sec * 0.85:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Búfer solo cubre {span:.1f}s; necesitas ~{offset_sec:.0f}s con broadcast activo",
+        )
+    try:
+        jpeg = capture_jpeg_from_buffer(buffer, offset_sec)
+    except SnapshotError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={
+            "X-Kanvis-Buffer-Offset-Sec": str(offset_sec),
+            "X-Kanvis-Buffer-Span-Sec": str(round(span, 2)),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @router.post("/cameras/{camera_id}/broadcast/start")
 async def broadcast_start(
     camera_id: str,
     repo: Annotated[CameraRepository, Depends(get_repository)],
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+    manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
     schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
+    mode: Literal["rtsp", "webrtc"] = Query(default="rtsp"),
 ) -> dict:
-    """Inicia rebroadcast RTSP (alias de relay/start para la UI de pruebas)."""
+    """Inicia búfer/ingesta; RTSP también arranca relay rebroadcast."""
     require_operating_now(schedule_svc)
     cam = await repo.get(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Cámara no encontrada")
+    await _start_broadcast_ingest(camera_id, manager)
+    buf = manager.get_buffer(camera_id)
+    out: dict = {
+        "broadcast": "started",
+        "camera_id": camera_id,
+        "mode": mode,
+        "buffer_span_seconds": round(buf.span_seconds(), 2) if buf else 0,
+    }
+    if mode == "webrtc":
+        if not cam.output.webrtc.enabled:
+            raise HTTPException(
+                status_code=400,
+                detail="Configura modo WebRTC antes de activar broadcast",
+            )
+        out["hint"] = "Búfer en marcha; conecta WebRTC o usa snapshot/buffer para prueba"
+        return out
     if not cam.output.relay.enabled:
         raise HTTPException(
             status_code=400,
-            detail="Activa output.relay.enabled en cameras.json antes de broadcast",
+            detail="Configura modo RTSP antes de activar broadcast",
         )
     await relay_manager.sync_from_repository()
     if not relay_manager.start_camera(camera_id):
@@ -174,18 +249,22 @@ async def broadcast_start(
             detail="No se pudo iniciar relay; revisa ffmpeg y logs",
         )
     relay = relay_manager.get_relay(camera_id)
-    status = relay.get_status() if relay else {"started": True}
-    return {"broadcast": "started", "camera_id": camera_id, "relay": status}
+    out["relay"] = relay.get_status() if relay else {"started": True}
+    if buf:
+        out["buffer_span_seconds"] = round(buf.span_seconds(), 2)
+    return out
 
 
 @router.post("/cameras/{camera_id}/broadcast/stop")
 async def broadcast_stop(
     camera_id: str,
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+    manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
 ) -> dict:
-    """Detiene rebroadcast RTSP."""
-    if not relay_manager.stop_camera(camera_id):
-        raise HTTPException(status_code=404, detail="Broadcast/relay no activo")
+    """Detiene relay/WebRTC rebroadcast y vacía la ingesta al búfer."""
+    relay_manager.stop_camera(camera_id)
+    loop = asyncio.get_running_loop()
+    await manager.set_broadcast_ingest(camera_id, False, loop)
     return {"broadcast": "stopped", "camera_id": camera_id}
 
 

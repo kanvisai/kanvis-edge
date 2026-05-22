@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from src.ingestion.consumer import StreamConsumerManager
+from src.relay.manager import RelayManager
 from src.webrtc.manager import WebRtcManager
 
 router = APIRouter(prefix="/api/v1/webrtc", tags=["webrtc"])
@@ -21,6 +24,14 @@ def get_webrtc_manager(request: Request) -> WebRtcManager:
     return request.app.state.webrtc_manager
 
 
+def get_consumer_manager(request: Request) -> StreamConsumerManager:
+    return request.app.state.consumer_manager
+
+
+def get_relay_manager(request: Request) -> RelayManager:
+    return request.app.state.relay_manager
+
+
 @router.get("")
 async def list_webrtc_sessions(
     manager: Annotated[WebRtcManager, Depends(get_webrtc_manager)],
@@ -32,12 +43,16 @@ async def list_webrtc_sessions(
 async def whep_offer(
     camera_id: str,
     body: SdpPayload,
+    request: Request,
     manager: Annotated[WebRtcManager, Depends(get_webrtc_manager)],
+    consumer_manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
 ) -> SdpPayload:
     """
     WHEP-like: el navegador/cliente envía SDP offer; el edge responde answer
     con vídeo desde el búfer (permite rewind previo).
     """
+    loop = asyncio.get_running_loop()
+    await consumer_manager.set_broadcast_ingest(camera_id, True, loop)
     try:
         answer = await manager.handle_whep_offer(camera_id, body.sdp, body.type)
     except KeyError as exc:
@@ -105,6 +120,12 @@ async def webrtc_status(
 async def webrtc_close(
     camera_id: str,
     manager: Annotated[WebRtcManager, Depends(get_webrtc_manager)],
+    consumer_manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
+    relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
 ) -> None:
     if not await manager.close_session(camera_id):
         raise HTTPException(status_code=404, detail="Sin sesión WebRTC activa")
+    relay = relay_manager.get_relay(camera_id)
+    if not (relay and relay.is_running):
+        loop = asyncio.get_running_loop()
+        await consumer_manager.set_broadcast_ingest(camera_id, False, loop)

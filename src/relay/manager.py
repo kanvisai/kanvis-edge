@@ -89,22 +89,21 @@ class RelayManager:
                 existing = self._relays.get(camera.camera_id)
                 if existing is None:
                     relay = FfmpegRtspRelay(camera, self._settings, port)
-                    relay.start()
                     self._relays[camera.camera_id] = relay
                     continue
 
                 changed = existing.update_camera(camera, port)
                 if changed:
                     logger.info(
-                        "Config relay cambió para %s — reiniciando",
+                        "Config relay cambió para %s — reiniciando si estaba activo",
                         camera.camera_id,
                     )
+                    was_running = existing.is_running
                     existing.stop()
                     new_relay = FfmpegRtspRelay(camera, self._settings, port)
-                    new_relay.start()
                     self._relays[camera.camera_id] = new_relay
-                elif not existing.is_running:
-                    existing.start()
+                    if was_running:
+                        new_relay.start()
 
     async def run_inventory_watcher(self) -> None:
         while True:

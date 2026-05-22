@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -242,49 +243,6 @@ async def list_brands(
     return {"brands_dir": str(root), "brands": items}
 
 
-@router.get("/brands/{slug}")
-async def get_brand(
-    slug: str,
-    settings: Annotated[AppSettings, Depends(get_app_settings)],
-) -> dict:
-    root = default_brands_dir(settings.config_dir)
-    try:
-        profile = load_brand_profile(slug, root)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {
-        "slug": slug.strip().lower(),
-        "brand": profile.brand,
-        "version": profile.version,
-        "models": profile.models,
-        "protocols": profile.protocols.model_dump(),
-    }
-
-
-@router.get("/cameras/{camera_id}/rtsp-urls")
-async def camera_rtsp_urls(
-    camera_id: str,
-    repo: Annotated[CameraRepository, Depends(get_repository)],
-    settings: Annotated[AppSettings, Depends(get_app_settings)],
-) -> dict:
-    """URLs RTSP dispositivo y edge (vivo/playback) según marca."""
-    camera = await repo.get(camera_id)
-    if not camera:
-        raise HTTPException(status_code=404, detail="Cámara no encontrada")
-    try:
-        urls = camera.rtsp_urls_summary(settings)
-    except (FileNotFoundError, ValueError, KeyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    masked = {k: _mask_url(v) for k, v in urls.items()}
-    return {
-        "camera_id": camera_id,
-        "brand": camera.source.brand,
-        "channel": camera.source.channel,
-        "urls_masked": masked,
-        "gateway_path": default_gateway_path(camera, settings),
-    }
-
-
 class CameraProbeRequest(BaseModel):
     """Prueba RTSP sin guardar cámara (vista previa JPEG)."""
 
@@ -297,12 +255,11 @@ class CameraProbeRequest(BaseModel):
     transport: str = "tcp"
 
 
-@router.post("/cameras/probe")
-async def probe_camera_rtsp(
+async def _probe_camera_rtsp_impl(
     body: CameraProbeRequest,
-    settings: Annotated[AppSettings, Depends(get_app_settings)],
+    settings: AppSettings,
 ) -> Response:
-    """Captura un frame JPEG desde RTSP con los datos del formulario (sin inventario previo)."""
+    """Captura un frame JPEG desde RTSP con los datos del formulario."""
     host = body.host.strip()
     if not host:
         raise HTTPException(status_code=400, detail="host requerido")
@@ -344,6 +301,67 @@ async def probe_camera_rtsp(
             "Cache-Control": "no-store",
         },
     )
+
+
+@router.post("/rtsp/probe")
+async def probe_camera_rtsp(
+    body: CameraProbeRequest,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> Response:
+    """Vista previa RTSP (UI). Ruta fija para no confundir con camera_id=probe."""
+    return await _probe_camera_rtsp_impl(body, settings)
+
+
+@router.post("/cameras/probe")
+async def probe_camera_rtsp_legacy(
+    body: CameraProbeRequest,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> Response:
+    """Alias retrocompatible."""
+    return await _probe_camera_rtsp_impl(body, settings)
+
+
+@router.get("/brands/{slug}")
+async def get_brand(
+    slug: str,
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> dict:
+    root = default_brands_dir(settings.config_dir)
+    try:
+        profile = load_brand_profile(slug, root)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "slug": slug.strip().lower(),
+        "brand": profile.brand,
+        "version": profile.version,
+        "models": profile.models,
+        "protocols": profile.protocols.model_dump(),
+    }
+
+
+@router.get("/cameras/{camera_id}/rtsp-urls")
+async def camera_rtsp_urls(
+    camera_id: str,
+    repo: Annotated[CameraRepository, Depends(get_repository)],
+    settings: Annotated[AppSettings, Depends(get_app_settings)],
+) -> dict:
+    """URLs RTSP dispositivo y edge (vivo/playback) según marca."""
+    camera = await repo.get(camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail="Cámara no encontrada")
+    try:
+        urls = camera.rtsp_urls_summary(settings)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    masked = {k: _mask_url(v) for k, v in urls.items()}
+    return {
+        "camera_id": camera_id,
+        "brand": camera.source.brand,
+        "channel": camera.source.channel,
+        "urls_masked": masked,
+        "gateway_path": default_gateway_path(camera, settings),
+    }
 
 
 @router.get("/cameras")
@@ -620,6 +638,7 @@ async def gateway_reload(
 async def relay_start(
     camera_id: str,
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+    consumer_manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
     repo: Annotated[CameraRepository, Depends(get_repository)],
     schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
 ) -> dict:
@@ -629,6 +648,8 @@ async def relay_start(
         raise HTTPException(status_code=404, detail="Cámara no encontrada")
     if not cam.output.relay.enabled:
         raise HTTPException(status_code=400, detail="relay.enabled=false en configuración")
+    loop = asyncio.get_running_loop()
+    await consumer_manager.set_broadcast_ingest(camera_id, True, loop)
     await relay_manager.sync_from_repository()
     if not relay_manager.start_camera(camera_id):
         raise HTTPException(status_code=404, detail="Relay no disponible para esta cámara")

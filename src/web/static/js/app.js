@@ -7,6 +7,8 @@ const TOKEN_KEY = "kanvis_token";
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+const PLAYBACK_OFFSET_SEC = 6;
+
 let brandsCache = [];
 let camerasCache = [];
 /** Borradores por IP aún no guardados en API */
@@ -139,11 +141,12 @@ function getAllDevices() {
       }
       draft.brand = draft.brand || dev.brand;
     } else {
+      const firstCam = dev.channels[0]?.camera;
       list.push({
         ...dev,
         fromApi: true,
-        probeChannel: dev.probeChannel || "101",
-        broadcastMode: "rtsp",
+        probeChannel: dev.probeChannel || firstCam?.source?.channel || "101",
+        broadcastMode: firstCam?.output?.webrtc?.enabled ? "webrtc" : "rtsp",
         path: "/Streaming/Channels/101",
       });
     }
@@ -168,10 +171,12 @@ function defaultChannelsForBrand(slug) {
   return [{ channel: "101", label: "Principal" }, { channel: "102", label: "Sub" }];
 }
 
-function buildCameraPayload(device, channel, label) {
+function buildCameraPayload(device, channel, label, opts = {}) {
   const id = makeCameraId(device.host, channel);
-  const relayOn = device.broadcastMode !== "webrtc";
-  const webrtcOn = device.broadcastMode === "webrtc";
+  const mode = opts.broadcastMode || device.broadcastMode || "rtsp";
+  const broadcastOn = !!opts.broadcastOn;
+  const relayOn = broadcastOn && mode !== "webrtc";
+  const webrtcOn = broadcastOn && mode === "webrtc";
   return {
     camera_id: id,
     label: label || `${device.host} ch${channel}`,
@@ -190,7 +195,7 @@ function buildCameraPayload(device, channel, label) {
       transport: "tcp",
     },
     output: {
-      protocol: relayOn || webrtcOn ? (webrtcOn ? "webrtc" : "rtsp") : "none",
+      protocol: broadcastOn ? (webrtcOn ? "webrtc" : "rtsp") : "none",
       gateway: { enabled: false, access_mode: "gateway", path: id },
       relay: {
         enabled: relayOn,
@@ -204,12 +209,12 @@ function buildCameraPayload(device, channel, label) {
       webrtc: {
         enabled: webrtcOn,
         mode: "whep",
-        rewind_offset_sec: 3,
+        rewind_offset_sec: PLAYBACK_OFFSET_SEC,
       },
     },
     buffer: {
       duration_seconds: 60,
-      default_playback_offset_sec: 6,
+      default_playback_offset_sec: PLAYBACK_OFFSET_SEC,
       event_pre_seconds: 6,
       event_post_seconds: 24,
     },
@@ -226,7 +231,7 @@ async function probeDevice(device, channel) {
     channel: String(channel || device.probeChannel || "101"),
     transport: "tcp",
   };
-  const blob = await api("/api/v1/cameras/probe", { method: "POST", json: body });
+  const blob = await api("/api/v1/rtsp/probe", { method: "POST", json: body });
   return URL.createObjectURL(blob);
 }
 
@@ -298,73 +303,69 @@ function renderChannelCard(device, chState, panel) {
   const cam = chState.camera;
   const cameraId = cam?.camera_id || makeCameraId(device.host, ch);
   const saved = chState.saved && !!cam;
-  const relayOn = cam?.output?.relay?.enabled;
-  const webrtcOn = cam?.output?.webrtc?.enabled;
-  const broadcastMode = webrtcOn ? "webrtc" : "rtsp";
+  const mode = device.broadcastMode || "rtsp";
 
   const card = document.createElement("div");
   card.className = "channel-card";
   card.dataset.channel = ch;
+  card.dataset.cameraId = cameraId;
 
   card.innerHTML = `
     <header>
       <strong>Canal ${ch}</strong>
       <span class="ch-status badge muted">—</span>
     </header>
-    ${saved ? "" : `
+    ${
+      saved
+        ? ""
+        : `
       <label>Nº canal</label>
       <input type="text" class="ch-input" value="${ch}" inputmode="numeric" />
-    `}
-    <div class="channel-actions">
-      ${saved ? `
-        <button type="button" class="btn-sm secondary" data-broadcast-rtsp="${cameraId}">RTSP ${relayOn ? "ON" : "OFF"}</button>
-        <button type="button" class="btn-sm secondary" data-broadcast-webrtc="${cameraId}">WebRTC</button>
-        <button type="button" class="btn-sm" data-save-ch="${cameraId}" style="display:none">Guardar</button>
-        <button type="button" class="btn-sm danger" data-del-ch="${cameraId}">Quitar</button>
-      ` : `
-        <button type="button" class="btn-sm" data-save-ch="">Guardar canal</button>
-        <button type="button" class="btn-sm danger" data-remove-draft-ch="">Quitar</button>
-      `}
-    </div>
-    <div class="broadcast-panel hidden">
-      <p class="hint">Modo: <span class="bc-mode-label">—</span></p>
-      <div class="channel-actions">
-        <button type="button" class="btn-sm" data-bc-start="${cameraId}">Iniciar broadcast</button>
-        <button type="button" class="btn-sm secondary" data-bc-stop="${cameraId}">Detener</button>
+      <button type="button" class="btn-sm" data-save-extra="">Guardar este canal</button>
+    `
+    }
+    ${
+      saved
+        ? `
+      <p class="section-label">Broadcast (búfer 60 s)</p>
+      <div class="mode-row">
+        <label class="mode-opt"><input type="radio" name="bc-mode-${cameraId}" value="rtsp" ${mode === "rtsp" ? "checked" : ""}/> RTSP</label>
+        <label class="mode-opt"><input type="radio" name="bc-mode-${cameraId}" value="webrtc" ${mode === "webrtc" ? "checked" : ""}/> WebRTC</label>
+      </div>
+      <button type="button" class="btn-block btn-toggle-bc off" data-toggle-bc="">Activar broadcast</button>
+      <p class="buf-hint hint">El búfer solo se rellena con broadcast activo.</p>
+      <button type="button" class="btn-block secondary" data-playback-test="" disabled>Probar playback (−${PLAYBACK_OFFSET_SEC} s)</button>
+      <div class="playback-preview hidden">
+        <p class="hint">Frame del búfer (comprueba la marca de agua / hora):</p>
+        <img alt="Playback" />
       </div>
       <video class="channel-video hidden" playsinline muted autoplay></video>
-    </div>
+      <button type="button" class="btn-sm danger" data-del-ch="">Eliminar canal</button>
+    `
+        : ""
+    }
   `;
 
   if (!saved) {
     card.querySelector(".ch-input")?.addEventListener("change", (e) => {
       chState.channel = e.target.value.trim() || ch;
     });
-    card.querySelector("[data-save-ch]")?.addEventListener("click", () => saveChannel(device, chState, card));
-    card.querySelector("[data-remove-draft-ch]")?.addEventListener("click", () => {
-      device.channels = device.channels.filter((c) => c !== chState);
-      if (device.channels.length === 0 && !device.fromApi) {
-        draftDevices = draftDevices.filter((d) => d.key !== device.key);
-        activeDeviceKey = null;
-      }
-      renderDevices();
-    });
+    card.querySelector("[data-save-extra]")?.addEventListener("click", () =>
+      saveExtraChannel(device, chState)
+    );
   } else {
-    const bcPanel = card.querySelector(".broadcast-panel");
-    if (relayOn || webrtcOn) {
-      bcPanel?.classList.remove("hidden");
-      card.querySelector(".bc-mode-label").textContent =
-        webrtcOn ? "WebRTC (WHEP)" : "RTSP rebroadcast";
-    }
-    card.querySelector(`[data-broadcast-rtsp]`)?.addEventListener("click", async () => {
-      await setBroadcastMode(device, cam, "rtsp", card);
+    card.querySelectorAll(`input[name="bc-mode-${cameraId}"]`).forEach((r) => {
+      r.addEventListener("change", () => {
+        device.broadcastMode = r.value;
+      });
     });
-    card.querySelector(`[data-broadcast-webrtc]`)?.addEventListener("click", async () => {
-      await setBroadcastMode(device, cam, "webrtc", card);
-    });
-    card.querySelector(`[data-del-ch]`)?.addEventListener("click", () => deleteCamera(cameraId));
-    card.querySelector(`[data-bc-start]`)?.addEventListener("click", () => startBroadcast(cameraId, broadcastMode, card));
-    card.querySelector(`[data-bc-stop]`)?.addEventListener("click", () => stopBroadcast(cameraId, card));
+    card.querySelector("[data-toggle-bc]")?.addEventListener("click", () =>
+      toggleBroadcast(device, cam, card)
+    );
+    card.querySelector("[data-playback-test]")?.addEventListener("click", () =>
+      testPlaybackBuffer(cameraId, card)
+    );
+    card.querySelector("[data-del-ch]")?.addEventListener("click", () => deleteCamera(cameraId));
     refreshChannelStatus(cameraId, card);
   }
 
@@ -407,16 +408,19 @@ function renderDevicePanel(device) {
         <input class="dev-pass" type="password" value="${device.password || ""}" autocomplete="current-password" />
       </div>
     </div>
+    <p class="section-label">1 · Conexión</p>
     <div class="probe-box">
       <div class="probe-preview">
-        <p class="probe-placeholder">Pulsa «Probar conexión» para ver un frame</p>
+        <p class="probe-placeholder">Prueba la URL RTSP antes de guardar</p>
       </div>
       <button type="button" class="btn-block secondary" data-probe="">Probar conexión</button>
       <p class="probe-msg hint"></p>
     </div>
-    <div class="actions">
-      <button type="button" class="btn-sm secondary" data-add-channel="">+ Canal</button>
-    </div>
+    <p class="section-label">2 · Guardar</p>
+    <button type="button" class="btn-block primary" data-save-device="">Guardar cámara</button>
+    <p class="save-hint hint">Guarda la IP y el canal de prueba (${device.probeChannel || "101"}). Luego podrás activar broadcast y probar el búfer.</p>
+    <p class="section-label">3 · Canales</p>
+    <button type="button" class="btn-sm secondary" data-add-channel="">+ Añadir otro canal</button>
     <div class="channels-root"></div>
   `;
 
@@ -480,6 +484,10 @@ function renderDevicePanel(device) {
     }
   });
 
+  panel.querySelector("[data-save-device]")?.addEventListener("click", () =>
+    saveCameraDevice(device, panel)
+  );
+
   panel.querySelector("[data-add-channel]")?.addEventListener("click", () => {
     const existing = new Set(device.channels.map((c) => c.channel));
     let next = "101";
@@ -521,25 +529,48 @@ function renderDevices() {
   panels.appendChild(renderDevicePanel(active));
 }
 
-async function saveChannel(device, chState, card) {
-  if (!device.host?.trim()) return toast("Indica la IP", true);
-  const chInput = card.querySelector(".ch-input");
-  const channel = (chInput?.value || chState.channel || "101").trim();
+async function persistCamera(device, channel, label) {
   const cameraId = makeCameraId(device.host, channel);
-  const payload = buildCameraPayload(device, channel, `${device.host} ch${channel}`);
+  const payload = buildCameraPayload(device, channel, label);
   payload.camera_id = cameraId;
+  const existing = camerasCache.find((c) => c.camera_id === cameraId);
+  if (existing) {
+    await api(`/api/v1/cameras/${cameraId}`, { method: "PUT", json: payload });
+  } else {
+    await api("/api/v1/cameras", { method: "POST", json: payload });
+  }
+  return cameraId;
+}
+
+async function saveCameraDevice(device, panel) {
+  if (!device.host?.trim()) return toast("Indica la IP", true);
+  if (!device.brand) return toast("Elige la marca de la cámara", true);
+  const channel = String(device.probeChannel || "101").trim();
   try {
-    const existing = camerasCache.find((c) => c.camera_id === cameraId);
-    if (existing) {
-      await api(`/api/v1/cameras/${cameraId}`, { method: "PUT", json: payload });
-      toast(`Canal ${channel} actualizado`);
-    } else {
-      await api("/api/v1/cameras", { method: "POST", json: payload });
-      toast(`Canal ${channel} guardado`);
+    await persistCamera(device, channel, `${device.host} ch${channel}`);
+    if (!device.channels.some((c) => c.channel === channel)) {
+      device.channels.unshift({ channel, saved: true, camera: null });
     }
-    draftDevices = draftDevices.filter((d) => d.key !== device.key || device.fromApi);
+    draftDevices = draftDevices.filter((d) => d.key !== device.key);
     device.key = hostKey(device.host);
     device.fromApi = true;
+    device.probeOk = true;
+    await loadCameras();
+    activeDeviceKey = device.key;
+    toast(`Cámara guardada (canal ${channel})`);
+    panel.querySelector(".save-hint").textContent =
+      "Guardada. Activa broadcast en el canal para llenar el búfer de 60 s.";
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function saveExtraChannel(device, chState) {
+  if (!device.host?.trim()) return toast("Indica la IP", true);
+  const channel = (chState.channel || "101").trim();
+  try {
+    await persistCamera(device, channel, `${device.host} ch${channel}`);
+    toast(`Canal ${channel} guardado`);
     await loadCameras();
     activeDeviceKey = device.key;
   } catch (err) {
@@ -547,88 +578,155 @@ async function saveChannel(device, chState, card) {
   }
 }
 
-async function setBroadcastMode(device, cam, mode, card) {
-  const id = cam.camera_id;
-  const payload = buildCameraPayload(
-    {
-      host: cam.source.host,
-      port: cam.source.port,
-      username: cam.source.username,
-      password: cam.source.password || "",
-      brand: cam.source.brand,
-      broadcastMode: mode,
-    },
-    cam.source.channel,
-    cam.label
+function isBroadcastRunning(st) {
+  return !!(
+    st.relay?.running ||
+    st.webrtc?.session?.connection_state === "connected" ||
+    (st.ingest?.connected && (st.buffer_span_seconds || 0) > 0.5)
   );
-  payload.camera_id = id;
-  try {
-    await api(`/api/v1/cameras/${id}`, { method: "PUT", json: payload });
-    toast(mode === "webrtc" ? "Modo WebRTC" : "Modo RTSP relay");
-    await loadCameras();
-    const bcPanel = card.querySelector(".broadcast-panel");
-    bcPanel?.classList.remove("hidden");
-    card.querySelector(".bc-mode-label").textContent =
-      mode === "webrtc" ? "WebRTC (WHEP)" : "RTSP rebroadcast";
-  } catch (err) {
-    toast(err.message, true);
-  }
 }
 
 async function refreshChannelStatus(cameraId, card) {
   const badge = card.querySelector(".ch-status");
+  const toggle = card.querySelector("[data-toggle-bc]");
+  const playbackBtn = card.querySelector("[data-playback-test]");
+  const bufHint = card.querySelector(".buf-hint");
   try {
     const st = await api(`/api/v1/cameras/${cameraId}/status`);
     const ing = st.ingest?.connected;
     const relay = st.relay?.running;
     const rtc = st.webrtc?.session?.connection_state === "connected";
+    const span = st.buffer_span_seconds || 0;
+    const bcOn = isBroadcastRunning(st);
+
     let html = ing
-      ? '<span class="badge ok">Vídeo OK</span>'
-      : '<span class="badge warn">Sin vídeo</span>';
-    if (relay) html += ' <span class="badge ok">RTSP ON</span>';
+      ? '<span class="badge ok">Ingesta OK</span>'
+      : '<span class="badge warn">Sin ingesta</span>';
+    if (relay) html += ' <span class="badge ok">RTSP</span>';
     if (rtc) html += ' <span class="badge ok">WebRTC</span>';
+    html += ` <span class="badge muted">Búfer ${span.toFixed(0)}s</span>`;
     badge.innerHTML = html;
+
+    if (toggle) {
+      toggle.textContent = bcOn ? "Desactivar broadcast" : "Activar broadcast";
+      toggle.classList.toggle("on", bcOn);
+      toggle.classList.toggle("off", !bcOn);
+    }
+    if (bufHint) {
+      bufHint.textContent = bcOn
+        ? `Búfer: ${span.toFixed(0)}s / ${st.buffer_max_duration_seconds || 60}s`
+        : "El búfer solo se rellena con broadcast activo.";
+    }
+    if (playbackBtn) {
+      playbackBtn.disabled = !bcOn || span < PLAYBACK_OFFSET_SEC * 0.85;
+    }
+    card.dataset.broadcastOn = bcOn ? "1" : "0";
   } catch {
-    badge.innerHTML = '<span class="badge muted">—</span>';
+    badge.innerHTML = '<span class="badge muted">Sin guardar / inactiva</span>';
+    if (toggle) {
+      toggle.textContent = "Activar broadcast";
+      toggle.classList.add("off");
+    }
+    if (playbackBtn) playbackBtn.disabled = true;
   }
 }
 
-async function startBroadcast(cameraId, mode, card) {
+async function toggleBroadcast(device, cam, card) {
+  const cameraId = cam.camera_id;
+  const mode =
+    card.querySelector(`input[name="bc-mode-${cameraId}"]:checked`)?.value ||
+    device.broadcastMode ||
+    "rtsp";
+  device.broadcastMode = mode;
+  const isOn = card.dataset.broadcastOn === "1";
+
   try {
-    if (mode === "webrtc") {
-      const video = card.querySelector("video");
-      await KanvisWebRtcViewer.connect(cameraId, api, {
-        video,
-        onState: (state) => {
-          if (state === "connected") toast("WebRTC conectado");
+    if (!isOn) {
+      const payload = buildCameraPayload(
+        {
+          host: cam.source.host,
+          port: cam.source.port,
+          username: cam.source.username,
+          password: device.password || "",
+          brand: cam.source.brand,
+          broadcastMode: mode,
         },
-      });
-      card.querySelector(".broadcast-panel")?.classList.remove("hidden");
-      toast("WebRTC iniciado");
+        cam.source.channel,
+        cam.label,
+        { broadcastOn: true, broadcastMode: mode }
+      );
+      payload.camera_id = cameraId;
+      await api(`/api/v1/cameras/${cameraId}`, { method: "PUT", json: payload });
+
+      const url =
+        mode === "webrtc"
+          ? `/api/v1/cameras/${cameraId}/broadcast/start?mode=webrtc`
+          : `/api/v1/cameras/${cameraId}/broadcast/start`;
+      await api(url, { method: "POST" });
+
+      if (mode === "webrtc") {
+        const video = card.querySelector("video");
+        await KanvisWebRtcViewer.connect(cameraId, api, {
+          video,
+          onState: (s) => {
+            if (s === "connected") toast("WebRTC conectado");
+          },
+        });
+        video?.classList.remove("hidden");
+      }
+      toast("Broadcast activado — rellenando búfer…");
+      let polls = 0;
+      const pollId = setInterval(() => {
+        refreshChannelStatus(cameraId, card);
+        if (++polls >= 20) clearInterval(pollId);
+      }, 2000);
     } else {
-      await api(`/api/v1/cameras/${cameraId}/broadcast/start`, { method: "POST" });
-      toast("Broadcast RTSP iniciado");
+      if (KanvisWebRtcViewer.getActiveCameraId() === cameraId) {
+        await KanvisWebRtcViewer.disconnect(api, cameraId);
+        const video = card.querySelector("video");
+        if (video) {
+          video.srcObject = null;
+          video.classList.add("hidden");
+        }
+      }
+      await api(`/api/v1/cameras/${cameraId}/broadcast/stop`, { method: "POST" });
+      const payload = buildCameraPayload(
+        {
+          host: cam.source.host,
+          port: cam.source.port,
+          username: cam.source.username,
+          password: device.password || "",
+          brand: cam.source.brand,
+          broadcastMode: mode,
+        },
+        cam.source.channel,
+        cam.label,
+        { broadcastOn: false }
+      );
+      payload.camera_id = cameraId;
+      await api(`/api/v1/cameras/${cameraId}`, { method: "PUT", json: payload });
+      toast("Broadcast desactivado");
     }
+    await loadCameras();
     await refreshChannelStatus(cameraId, card);
   } catch (err) {
     toast(err.message, true);
   }
 }
 
-async function stopBroadcast(cameraId, card) {
+async function testPlaybackBuffer(cameraId, card) {
+  const box = card.querySelector(".playback-preview");
+  const img = box?.querySelector("img");
   try {
-    if (KanvisWebRtcViewer.getActiveCameraId() === cameraId) {
-      await KanvisWebRtcViewer.disconnect(api, cameraId);
-      const video = card.querySelector("video");
-      if (video) {
-        video.srcObject = null;
-        video.classList.add("hidden");
-      }
-    } else {
-      await api(`/api/v1/cameras/${cameraId}/broadcast/stop`, { method: "POST" });
+    toast(`Capturando frame de hace ${PLAYBACK_OFFSET_SEC}s…`);
+    const blob = await api(
+      `/api/v1/cameras/${cameraId}/snapshot/buffer?offset_sec=${PLAYBACK_OFFSET_SEC}`
+    );
+    if (img) {
+      img.src = URL.createObjectURL(blob);
+      box.classList.remove("hidden");
     }
-    toast("Broadcast detenido");
-    await refreshChannelStatus(cameraId, card);
+    toast("Compara la marca de agua con la hora actual");
   } catch (err) {
     toast(err.message, true);
   }

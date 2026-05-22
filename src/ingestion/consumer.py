@@ -176,7 +176,30 @@ class StreamConsumerManager:
         self._consumers: dict[str, StreamConsumer] = {}
         self._buffers: dict[str, PacketCircularBuffer] = {}
         self._cameras: dict[str, CameraRecord] = {}
+        self._broadcast_ingest_ids: set[str] = set()
         self._lock = asyncio.Lock()
+
+    def is_broadcast_ingest_active(self, camera_id: str) -> bool:
+        return camera_id in self._broadcast_ingest_ids
+
+    async def set_broadcast_ingest(
+        self,
+        camera_id: str,
+        active: bool,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        """Ingesta/búfer solo mientras el broadcast está activo (UI)."""
+        async with self._lock:
+            if active:
+                self._broadcast_ingest_ids.add(camera_id)
+            else:
+                self._broadcast_ingest_ids.discard(camera_id)
+                consumer = self._consumers.pop(camera_id, None)
+                if consumer:
+                    consumer.stop()
+                self._buffers.pop(camera_id, None)
+                self._cameras.pop(camera_id, None)
+        await self.sync_from_repository(loop)
 
     def _stop_all_locked(self) -> None:
         for consumer in self._consumers.values():
@@ -215,8 +238,12 @@ class StreamConsumerManager:
             return
 
         cameras = await self._repository.list_enabled()
-        active_ids = {c.camera_id for c in cameras}
-        by_id = {c.camera_id: c for c in cameras}
+        ingest_cameras = [
+            c
+            for c in cameras
+            if c.camera_id in self._broadcast_ingest_ids
+        ]
+        active_ids = {c.camera_id for c in ingest_cameras}
 
         async with self._lock:
             for cam_id in list(self._consumers):
@@ -226,7 +253,7 @@ class StreamConsumerManager:
                     del self._buffers[cam_id]
                     del self._cameras[cam_id]
 
-            for camera in cameras:
+            for camera in ingest_cameras:
                 duration = camera.effective_buffer_duration(
                     self._settings.buffer_duration_seconds
                 )
