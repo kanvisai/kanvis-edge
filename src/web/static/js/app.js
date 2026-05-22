@@ -128,6 +128,32 @@ function groupCamerasByHost(cameras) {
   return map;
 }
 
+function upsertDeviceDraft(device) {
+  const key = device.key || hostKey(device.host) || `draft-${Date.now()}`;
+  device.key = key;
+  const idx = draftDevices.findIndex((d) => d.key === key);
+  const snap = { ...device, key };
+  if (idx >= 0) draftDevices[idx] = { ...draftDevices[idx], ...snap };
+  else draftDevices.push(snap);
+}
+
+function mergeDraftWithSaved(draft, dev) {
+  return {
+    ...dev,
+    ...draft,
+    key: draft.key || dev.key,
+    host: draft.host ?? dev.host,
+    port: draft.port ?? dev.port,
+    brand: draft.brand ?? dev.brand,
+    username: draft.username !== undefined ? draft.username : dev.username,
+    password: draft.password !== undefined ? draft.password : dev.password,
+    probeChannel: draft.probeChannel ?? dev.probeChannel,
+    broadcastMode: draft.broadcastMode ?? dev.broadcastMode,
+    channels: draft.channels?.length ? draft.channels : dev.channels,
+    fromApi: draft.fromApi !== undefined ? draft.fromApi : dev.fromApi,
+  };
+}
+
 function getAllDevices() {
   const saved = groupCamerasByHost(camerasCache);
   const list = [...draftDevices];
@@ -139,7 +165,8 @@ function getAllDevices() {
           draft.channels.push({ ...ch });
         }
       }
-      draft.brand = draft.brand || dev.brand;
+      const i = list.indexOf(draft);
+      list[i] = mergeDraftWithSaved(draft, dev);
     } else {
       const firstCam = dev.channels[0]?.camera;
       list.push({
@@ -457,32 +484,42 @@ function renderDevicePanel(device) {
     if (el) el.addEventListener("change", fn);
   };
 
+  const persistFields = () => upsertDeviceDraft(device);
+
   bind(".dev-host", (e) => {
     device.host = e.target.value;
     updateDeviceNavLabel(device);
+    persistFields();
   });
   bind(".dev-port", (e) => {
     device.port = e.target.value;
+    persistFields();
   });
   bind(".dev-user", (e) => {
     device.username = e.target.value;
+    persistFields();
   });
   bind(".dev-pass", (e) => {
     device.password = e.target.value;
+    persistFields();
   });
   bind(".dev-probe-ch", (e) => {
     device.probeChannel = e.target.value.trim() || "101";
+    persistFields();
   });
   panel.querySelector(".dev-brand")?.addEventListener("change", (e) => {
     device.brand = e.target.value;
-    if (!device.channels.length) {
-      device.channels = defaultChannelsForBrand(device.brand).map((c) => ({
+    const defs = defaultChannelsForBrand(device.brand);
+    device.probeChannel = defs[0]?.channel || "101";
+    if (!device.channels.some((c) => c.saved)) {
+      device.channels = defs.map((c) => ({
         channel: c.channel,
         label: c.label,
         saved: false,
         camera: null,
       }));
     }
+    upsertDeviceDraft(device);
     renderDevices();
   });
 

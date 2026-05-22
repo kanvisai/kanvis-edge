@@ -1,9 +1,7 @@
 {
     "brand": "TP-Link",
     "version": "1.0.0",
-    "models": [
-      "Tapo C200"
-    ],
+    "models": [],
     "default_channels": [
       { "id": "stream1", "label": "Principal (main - 1080p)" },
       { "id": "stream2", "label": "Substream (360p)" }
@@ -11,8 +9,8 @@
     "protocols": {
       "rtsp": {
         "stream_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/{{channel}}",
-        "playback_template": "",
-        "time_format": "",
+        "playback_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/Streaming/tracks/{{channel}}?starttime={{starttime}}&endtime={{endtime}}",
+       "time_format": "YYYY-MM-DDTHH:mm:ss[Z]",
         "requires_utc": false
       }
     }
