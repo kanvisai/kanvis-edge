@@ -89,7 +89,8 @@ render_template() {
       -e "s|@DHCP_END@|${dend}|g" \
       -e '/^@WPA_BLOCK@$/d' \
       "$template" > "$dest"
-  if [[ -n "${AP_PASSWORD}" ]]; then
+  # Solo hostapd: el bloque WPA en dnsmasq-ap.conf provoca "bad option" (línea 7+).
+  if [[ -n "${AP_PASSWORD}" && "$template" == *hostapd* ]]; then
     {
       echo "wpa=2"
       echo "wpa_key_mgmt=WPA-PSK"
