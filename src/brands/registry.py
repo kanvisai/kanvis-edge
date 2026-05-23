@@ -9,7 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from src.brands.models import BrandProfile
 from src.brands.time_format import format_instant
@@ -79,17 +79,23 @@ def render_rtsp_url(
     if mode == "playback":
         if starttime is None or endtime is None:
             raise ValueError("playback mode requires starttime and endtime")
-        merged["starttime"] = format_instant(
-            starttime,
-            time_format=rtsp.time_format,
-            requires_utc=rtsp.requires_utc,
-            time_offset_minutes=time_offset_minutes,
+        merged["starttime"] = quote(
+            format_instant(
+                starttime,
+                time_format=rtsp.time_format,
+                requires_utc=rtsp.requires_utc,
+                time_offset_minutes=time_offset_minutes,
+            ),
+            safe="-T",
         )
-        merged["endtime"] = format_instant(
-            endtime,
-            time_format=rtsp.time_format,
-            requires_utc=rtsp.requires_utc,
-            time_offset_minutes=time_offset_minutes,
+        merged["endtime"] = quote(
+            format_instant(
+                endtime,
+                time_format=rtsp.time_format,
+                requires_utc=rtsp.requires_utc,
+                time_offset_minutes=time_offset_minutes,
+            ),
+            safe="-T",
         )
     return _substitute(template, merged)
 

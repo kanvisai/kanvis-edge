@@ -65,8 +65,8 @@ def test_render_annke_playback_utc() -> None:
         endtime=end,
     )
     assert "Streaming/tracks/101" in url
-    assert "starttime=2024-06-01T10:00:00Z" in url
-    assert "endtime=2024-06-01T10:05:00Z" in url
+    assert "starttime=2024-06-01T10%3A00%3A00Z" in url
+    assert "endtime=2024-06-01T10%3A05%3A00Z" in url
 
 
 def test_render_tplink_playback_local(monkeypatch) -> None:
@@ -97,8 +97,8 @@ def test_render_tplink_playback_local(monkeypatch) -> None:
         endtime=end,
     )
     assert "Streaming/tracks/stream1" in url
-    assert "starttime=2026-05-23T22:00:00" in url
-    assert "endtime=2026-05-23T22:00:36" in url
+    assert "starttime=2026-05-23T22%3A00%3A00" in url
+    assert "endtime=2026-05-23T22%3A00%3A36" in url
     assert "Z" not in url.split("?", 1)[1]
 
     from src.brands.time_format import parse_instant

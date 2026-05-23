@@ -40,6 +40,10 @@ _fmt_local_param() {
   date -d "@$1" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || date -r "$1" +"%Y-%m-%dT%H:%M:%S"
 }
 
+_urlencode_time() {
+  _fmt_local_param "$1" | sed 's/:/%3A/g'
+}
+
 now=$(date +%s)
 start_epoch=$((now - START_OFFSET_SEC))
 end_epoch=$((now + PLAYBACK_DURATION_SEC))
@@ -47,11 +51,13 @@ end_epoch=$((now + PLAYBACK_DURATION_SEC))
 if [[ "${PLAYBACK_TIME}" == "utc" ]]; then
   starttime=$(_fmt_utc_param "${start_epoch}")
   endtime=$(_fmt_utc_param "${end_epoch}")
-  time_note="UTC (Z)"
+  starttime=$(printf '%s' "$starttime" | sed 's/:/%3A/g')
+  endtime=$(printf '%s' "$endtime" | sed 's/:/%3A/g')
+  time_note="UTC (Z), codificado para RTSP"
 else
-  starttime=$(_fmt_local_param "${start_epoch}")
-  endtime=$(_fmt_local_param "${end_epoch}")
-  time_note="hora local (sin Z), como TP-Link"
+  starttime=$(_urlencode_time "${start_epoch}")
+  endtime=$(_urlencode_time "${end_epoch}")
+  time_note="hora local (sin Z), codificado para RTSP"
 fi
 
 PATH_RTSP="Streaming/tracks/${PLAYBACK_CHANNEL}"

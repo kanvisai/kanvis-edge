@@ -73,6 +73,14 @@ def test_generate_mediamtx_config_paths() -> None:
     assert cfg["paths"]["cam-01"]["sourceOnDemand"] is True
 
 
+def test_build_playback_run_on_demand_quotes_http_url() -> None:
+    from src.gateway.config import build_playback_run_on_demand
+
+    cmd = build_playback_run_on_demand(AppSettings())
+    assert '-i "http://127.0.0.1:' in cmd
+    assert "mtx_path=$MTX_PATH&mtx_query=$MTX_QUERY\"" in cmd
+
+
 def test_generate_mediamtx_config_brand_playback_path() -> None:
     from pydantic import SecretStr
 
