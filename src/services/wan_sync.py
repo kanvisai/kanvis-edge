@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from src.config_loader import AppSettings, DDNSProvider
 from src.services.public_ip import fetch_public_ip_from_internet
 
