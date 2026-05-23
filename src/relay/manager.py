@@ -42,6 +42,12 @@ class RelayManager:
             return False
         if camera.output.protocol == OutputProtocol.WEBRTC:
             return False
+        # Gateway MediaMTX usa el mismo puerto RTSP; no competir con FFmpeg listen.
+        if (
+            self._settings.rtsp_gateway_enabled
+            and camera.output.gateway.enabled
+        ):
+            return False
         return True
 
     def _allocate_port(self, camera: CameraRecord, index: int) -> int:

@@ -834,15 +834,17 @@ def _build_camera_access_info(
             lan_host=lan_host,
             public_host=public_host,
         )
-        gw_running = False
+        gw_status: dict[str, Any] = {}
         if gateway_manager is not None:
-            gw_running = bool(
-                gateway_manager.is_enabled and gateway_manager.get_status().get("running")
-            )
+            gw_status = gateway_manager.get_status([camera])
+        gw_running = bool(gw_status.get("running"))
         gateway_block: dict[str, Any] = {
             "global_enabled": True,
             "camera_enabled": camera.output.gateway.enabled,
             "running": gw_running,
+            "mediamtx_binary": gw_status.get("mediamtx_binary"),
+            "last_error": gw_status.get("last_error"),
+            "config_path": gw_status.get("config_path"),
             "lan_host": lan_host,
             "public_host": public_host or None,
             "hints": [
@@ -857,11 +859,27 @@ def _build_camera_access_info(
             gateway_block["config_error"] = urls["error"]
         else:
             gateway_block.update(urls)
-        if not camera.output.gateway.enabled:
+        if not gw_running and gw_status.get("last_error"):
+            gateway_block["hints"].insert(
+                0,
+                f"MediaMTX no está en marcha: {gw_status['last_error']}",
+            )
+        elif not gw_running and not gw_status.get("mediamtx_binary"):
+            gateway_block["hints"].insert(
+                0,
+                "Instala MediaMTX (scripts/install.sh o apt) y define MEDIAMTX_BINARY en .env.",
+            )
+        elif not camera.output.gateway.enabled:
             gateway_block["hints"].insert(
                 0,
                 "Activa output.gateway.enabled en esta cámara y POST /api/v1/gateway/reload "
                 "para registrar las rutas en MediaMTX.",
+            )
+        elif not gw_running:
+            gateway_block["hints"].insert(
+                0,
+                "Reinicia el servicio o POST /api/v1/gateway/reload. Si el relay usaba el "
+                f"puerto {settings.rtsp_gateway_port}, desactívalo (el gateway lo sustituye).",
             )
 
     out: dict = {

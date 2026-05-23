@@ -98,6 +98,18 @@ class GatewayManager:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
+                await asyncio.sleep(0.4)
+                if self._proc.poll() is not None:
+                    err_tail = b""
+                    if self._proc.stderr:
+                        err_tail = self._proc.stderr.read()[-800:]
+                    self._last_error = (
+                        f"MediaMTX terminó al arrancar (exit={self._proc.returncode}): "
+                        f"{err_tail.decode('utf-8', errors='replace').strip() or 'sin stderr'}"
+                    )
+                    self._proc = None
+                    logger.error("RTSP gateway: %s", self._last_error)
+                    return
                 self._config_sig = sig
                 self._last_error = None
                 logger.info(

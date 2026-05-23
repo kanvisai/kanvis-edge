@@ -331,7 +331,7 @@ function buildCameraPayload(device, channel, label, opts = {}) {
     opts.cameraId ?? resolveCameraId(device.host, channel) ?? makeCameraId(device.host, channel);
   const mode = opts.broadcastMode || device.broadcastMode || "rtsp";
   const broadcastOn = !!opts.broadcastOn;
-  const relayOn = broadcastOn && mode !== "webrtc";
+  const relayOn = broadcastOn && mode !== "webrtc" && !edgeConfig.rtsp_gateway_enabled;
   const webrtcOn = broadcastOn && mode === "webrtc";
   return {
     camera_id: id,
@@ -681,6 +681,13 @@ function renderConnectionHints(el, info, mode) {
     html += `<div class="conn-block conn-gateway"><strong>RTSP Gateway (vivo + playback)</strong> ${runBadge} ${camBadge}`;
     if (gw.config_error) {
       html += `<p class="hint err-text">${escapeHtml(gw.config_error)}</p>`;
+    }
+    if (!gw.running && gw.last_error) {
+      html += `<p class="hint err-text"><strong>Detalle:</strong> ${escapeHtml(
+        gw.last_error
+      )}</p>`;
+    } else if (!gw.running && !gw.mediamtx_binary) {
+      html += `<p class="hint err-text">MediaMTX no instalado en el edge (MEDIAMTX_BINARY / scripts/install.sh).</p>`;
     }
     for (const h of gw.hints || []) {
       html += `<p class="hint">${escapeHtml(h)}</p>`;

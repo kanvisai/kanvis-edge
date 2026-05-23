@@ -13,6 +13,7 @@ from src.api.dispatcher import VideoDispatcher
 from src.config_loader import AppSettings
 from src.discovery.repository import CameraRepository
 from src.ingestion.consumer import StreamConsumerManager
+from src.gateway.manager import GatewayManager
 from src.relay.manager import RelayManager
 from src.relay.worker import _mask_url, build_relay_urls
 from src.schedule.service import OperatingScheduleService, require_operating_now
@@ -42,6 +43,10 @@ def get_consumer_manager(request: Request) -> StreamConsumerManager:
 
 def get_relay_manager(request: Request) -> RelayManager:
     return request.app.state.relay_manager
+
+
+def get_gateway_manager(request: Request) -> GatewayManager:
+    return request.app.state.gateway_manager
 
 
 def get_schedule_service(request: Request) -> OperatingScheduleService:
@@ -267,7 +272,9 @@ async def broadcast_start(
     camera_id: str,
     repo: Annotated[CameraRepository, Depends(get_repository)],
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+    gateway_manager: Annotated[GatewayManager, Depends(get_gateway_manager)],
     manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
+    settings: Annotated[AppSettings, Depends(get_settings)],
     schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
     mode: Literal["rtsp", "webrtc"] = Query(default="rtsp"),
 ) -> dict:
@@ -315,7 +322,10 @@ async def broadcast_start(
             )
         out["hint"] = "Búfer en marcha; conecta WebRTC o usa snapshot/buffer para prueba"
         return out
-    if not cam.output.relay.enabled:
+    use_gateway_rtsp = (
+        settings.rtsp_gateway_enabled and cam.output.gateway.enabled
+    )
+    if not use_gateway_rtsp and not cam.output.relay.enabled:
         raise HTTPException(
             status_code=400,
             detail="Configura modo RTSP antes de activar broadcast",
@@ -330,13 +340,26 @@ async def broadcast_start(
                 f"Revisa IP/canal/marca. Último error: {err}"
             ),
         )
-    if not relay_manager.start_camera(camera_id):
-        raise HTTPException(
-            status_code=503,
-            detail="No se pudo iniciar relay; revisa ffmpeg y logs",
+    if use_gateway_rtsp:
+        await gateway_manager.sync_from_repository()
+        gw = gateway_manager.get_status([cam])
+        out["gateway_rtsp"] = True
+        out["gateway_running"] = gw.get("running")
+        out["gateway_last_error"] = gw.get("last_error")
+        out["hint"] = (
+            "Salida RTSP vía MediaMTX (gateway). Usa las URLs «RTSP Gateway» del panel; "
+            "no hace falta relay FFmpeg en el puerto 8554."
         )
-    relay = relay_manager.get_relay(camera_id)
-    out["relay"] = relay.get_status() if relay else {"started": True}
+        if not gw.get("running"):
+            out["hint"] += f" MediaMTX: {gw.get('last_error') or 'no arrancó'}."
+    else:
+        if not relay_manager.start_camera(camera_id):
+            raise HTTPException(
+                status_code=503,
+                detail="No se pudo iniciar relay; revisa ffmpeg y logs",
+            )
+        relay = relay_manager.get_relay(camera_id)
+        out["relay"] = relay.get_status() if relay else {"started": True}
     if buf:
         out["buffer_span_seconds"] = round(buf.span_seconds(), 2)
     return out
