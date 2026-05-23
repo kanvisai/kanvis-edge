@@ -45,12 +45,12 @@ def get_schedule_service(request: Request) -> OperatingScheduleService:
 @router.get("/rtsp-playback")
 async def internal_rtsp_playback(
     request: Request,
-    mtx_path: str = Query(..., description="MTX_PATH de MediaMTX"),
-    mtx_query: str = Query(default="", description="MTX_QUERY (starttime/endtime)"),
     settings: Annotated[AppSettings, Depends(get_settings)],
     repository: Annotated[CameraRepository, Depends(get_repository)],
     manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
     schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
+    mtx_path: Annotated[str, Query(description="MTX_PATH de MediaMTX")],
+    mtx_query: Annotated[str, Query(description="MTX_QUERY (starttime/endtime)")] = "",
 ) -> StreamingResponse:
     """
     Stream H.264 Annex-B para FFmpeg (runOnDemand de MediaMTX).
