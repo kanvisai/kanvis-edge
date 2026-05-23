@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from src.ingestion.buffer import PacketCircularBuffer, RawPacket
-from src.playback.parse import parse_playback_query_string
+from src.playback.parse import parse_playback_query_string, playback_query_from_request
 from src.playback.window import plan_playback_window
 
 
@@ -69,3 +69,28 @@ def test_parse_annke_query() -> None:
     )
     assert start.year == 2026
     assert (end - start).total_seconds() == 30.0
+
+
+def test_playback_query_from_request_split_params() -> None:
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/internal/rtsp-playback",
+        "query_string": (
+            b"mtx_path=Streaming/tracks/stream1"
+            b"&starttime=2026-05-23T22%3A55%3A14"
+            b"&endtime=2026-05-23T22%3A55%3A50"
+        ),
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("127.0.0.1", 8000),
+        "scheme": "http",
+        "http_version": "1.1",
+    }
+    request = Request(scope)
+    q = playback_query_from_request(request, "")
+    start, end = parse_playback_query_string(q, profile=None)
+    assert start.hour == 22
+    assert (end - start).total_seconds() == 36.0

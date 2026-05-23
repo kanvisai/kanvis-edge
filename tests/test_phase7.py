@@ -78,7 +78,8 @@ def test_build_playback_run_on_demand_quotes_http_url() -> None:
 
     cmd = build_playback_run_on_demand(AppSettings())
     assert '-i "http://127.0.0.1:' in cmd
-    assert "mtx_path=$MTX_PATH&mtx_query=$MTX_QUERY\"" in cmd
+    assert "mtx_path=$MTX_PATH&$MTX_QUERY\"" in cmd
+    assert "mtx_query=" not in cmd
 
 
 def test_generate_mediamtx_config_brand_playback_path() -> None:
@@ -109,6 +110,38 @@ def test_generate_mediamtx_config_brand_playback_path() -> None:
     assert "Streaming/tracks/101" in cfg["paths"]
     assert "runOnDemand" in cfg["paths"]["Streaming/tracks/101"]
     assert cfg["paths"]["Streaming/tracks/101"]["runOnDemandRestart"] is False
+
+
+def test_render_yaml_run_on_demand_single_line() -> None:
+    from pydantic import SecretStr
+
+    from src.discovery.models import CameraBufferSettings, CameraSource
+
+    settings = AppSettings(RTSP_GATEWAY_ENABLED=True)
+    cam = CameraRecord(
+        camera_id="cam-tp",
+        enabled=True,
+        source=CameraSource(
+            host="192.168.1.68",
+            port=554,
+            username="c",
+            password=SecretStr("p"),
+            brand="tplink",
+            channel="stream1",
+        ),
+        output=CameraOutput(
+            protocol=OutputProtocol.RTSP,
+            gateway=CameraGatewayOutput(enabled=True, access_mode=ExternalAccessMode.GATEWAY),
+        ),
+        buffer=CameraBufferSettings(),
+    )
+    yaml_text = render_mediamtx_yaml(generate_mediamtx_config([cam], settings))
+    for line in yaml_text.splitlines():
+        if line.strip().startswith("runOnDemand:"):
+            assert line.count(" -c copy ") == 1
+            assert "&$MTX_QUERY" in line
+            return
+    raise AssertionError("runOnDemand not found in yaml")
 
 
 def test_render_yaml_contains_path() -> None:

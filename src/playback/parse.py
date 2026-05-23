@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qs, unquote
+from urllib.parse import parse_qs, unquote, urlencode
 
 from src.brands.time_format import parse_instant
 
 if TYPE_CHECKING:
+    from starlette.requests import Request
+
     from src.brands.models import BrandProfile
 
 _START_KEYS = ("starttime", "start", "begin", "from")
@@ -26,6 +28,27 @@ def _first_param(query: dict[str, list[str]], keys: tuple[str, ...]) -> str | No
             if qk.lower() == alt and vals and vals[0].strip():
                 return vals[0].strip()
     return None
+
+
+def playback_query_from_request(request: Request, mtx_query: str = "") -> str:
+    """
+    Query de playback para parse_playback_query_string.
+
+    MediaMTX/FFmpeg pasan starttime y endtime como params sueltos
+    (?mtx_path=…&starttime=…&endtime=…), no empaquetados en mtx_query=.
+    """
+    raw = (mtx_query or "").strip()
+    if raw:
+        return raw
+    params = parse_qs(request.url.query, keep_blank_values=False)
+    params.pop("mtx_path", None)
+    entries = params.pop("mtx_query", None)
+    if not params and entries:
+        return entries[0]
+    if not params:
+        return ""
+    flat = {k: v[0] for k, v in params.items() if v and v[0].strip()}
+    return urlencode(flat, safe=":-T%Z")
 
 
 def parse_playback_query_string(

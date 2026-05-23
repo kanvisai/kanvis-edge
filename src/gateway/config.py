@@ -37,11 +37,13 @@ def build_playback_run_on_demand(settings: AppSettings) -> str:
     """FFmpeg publica en MediaMTX leyendo H.264 desde el API interno (búfer + vivo)."""
     api_port = settings.edge_api_port
     ff = settings.ffmpeg_path
-    # Comillas obligatorias: MediaMTX ejecuta runOnDemand con sh y el & rompe el -i sin ellas.
+    # Comillas: sh no parte el & del -i. &$MTX_QUERY (no mtx_query=...) evita que el &
+    # de starttime/endtime rompa la query HTTP de FFmpeg.
     return (
-        f"{ff} -loglevel warning -nostdin -re -f h264 "
+        f"{ff} -loglevel warning -nostdin -probesize 8192 -analyzeduration 0 "
+        f"-f h264 "
         f'-i "http://127.0.0.1:{api_port}/api/v1/internal/rtsp-playback'
-        f'?mtx_path=$MTX_PATH&mtx_query=$MTX_QUERY" '
+        f'?mtx_path=$MTX_PATH&$MTX_QUERY" '
         f"-c copy -an -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH"
     )
 
@@ -118,7 +120,14 @@ def generate_mediamtx_config(
 
 
 def render_mediamtx_yaml(config: dict[str, Any]) -> str:
-    return yaml.dump(config, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    # Una sola línea por runOnDemand (PyYAML/Go parten comandos largos si width es bajo).
+    return yaml.dump(
+        config,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+        width=4096,
+    )
 
 
 def gateway_config_signature(

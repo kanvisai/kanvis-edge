@@ -12,7 +12,7 @@ from starlette.status import HTTP_403_FORBIDDEN
 from src.config_loader import AppSettings, get_settings
 from src.discovery.repository import CameraRepository
 from src.ingestion.consumer import StreamConsumerManager
-from src.playback.parse import parse_playback_query_string
+from src.playback.parse import parse_playback_query_string, playback_query_from_request
 from src.playback.resolver import brand_profile_for_camera, find_camera_for_gateway_path
 from src.playback.stream import PlaybackStreamError, stream_playback_h264
 from src.schedule.service import OperatingScheduleService, require_operating_now
@@ -70,8 +70,9 @@ async def internal_rtsp_playback(
         raise HTTPException(status_code=404, detail=f"Ruta RTSP desconocida: {mtx_path}")
 
     profile = brand_profile_for_camera(camera, settings)
+    query_raw = playback_query_from_request(request, mtx_query)
     try:
-        start, end = parse_playback_query_string(mtx_query, profile=profile)
+        start, end = parse_playback_query_string(query_raw, profile=profile)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -85,6 +86,31 @@ async def internal_rtsp_playback(
                 "gateway con ingesta automática"
             ),
         )
+
+    depth = camera.effective_buffer_duration(settings.buffer_duration_seconds)
+    from src.ingestion.packet_decode import trim_packets_from_keyframe
+    from src.playback.window import plan_playback_window
+
+    try:
+        plan = plan_playback_window(
+            start=start, end=end, buffer_depth_sec=depth
+        )
+        if plan.needs_buffer:
+            packets = trim_packets_from_keyframe(
+                buffer.snapshot_between_ages(
+                    plan.buffer_start_sec_ago,
+                    plan.buffer_end_sec_ago,
+                )
+            )
+            if not packets:
+                raise PlaybackStreamError(
+                    f"Búfer insuficiente para {plan.buffer_start_sec_ago:.1f}s; "
+                    "activa ingesta y espera a que se llene"
+                )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PlaybackStreamError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     async def _body():
         try:
