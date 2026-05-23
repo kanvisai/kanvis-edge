@@ -8,6 +8,10 @@ class RtspProtocolSpec(BaseModel):
     playback_template: str
     time_format: str
     requires_utc: bool = False
+    device_playback_supported: bool = Field(
+        default=True,
+        description="False si la cámara no tiene RTSP playback (p. ej. Tapo); el edge solo usa búfer+vivo",
+    )
 
 
 class BrandProtocols(BaseModel):

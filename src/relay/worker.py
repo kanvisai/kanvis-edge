@@ -175,10 +175,9 @@ class FfmpegRtspRelay:
 
     @property
     def is_running(self) -> bool:
+        """True solo si el subproceso FFmpeg está vivo (no basta el hilo supervisor)."""
         with self._lock:
-            if self._process is not None and self._process.poll() is None:
-                return True
-            return self._thread is not None and self._thread.is_alive()
+            return self._process is not None and self._process.poll() is None
 
     def get_status(self) -> dict:
         source_url, output_url = build_relay_urls(

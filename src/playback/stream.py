@@ -16,6 +16,8 @@ from src.discovery.models import CameraRecord
 from src.ingestion.buffer import PacketCircularBuffer, RawPacket
 from src.ingestion.consumer import StreamConsumer
 from src.ingestion.packet_decode import to_annex_b, trim_packets_from_keyframe
+from src.brands import load_brand_profile
+from src.brands.registry import default_brands_dir
 from src.playback.window import PlaybackPlan, plan_playback_window
 
 logger = logging.getLogger(__name__)
@@ -84,7 +86,16 @@ async def stream_playback_h264(
         async for chunk in _emit_live_until(consumer, codec, frame_interval, deadline):
             yield chunk
 
-    if plan.needs_camera:
+    device_playback = True
+    brand = (camera.source.brand or "").strip().lower()
+    if brand:
+        try:
+            profile = load_brand_profile(brand, default_brands_dir(settings.config_dir))
+            device_playback = profile.protocols.rtsp.device_playback_supported
+        except FileNotFoundError:
+            pass
+
+    if plan.needs_camera and device_playback:
         assert plan.camera_start is not None and plan.camera_end is not None
         logger.info(
             "Playback %s: cámara %s → %s",
@@ -101,6 +112,11 @@ async def stream_playback_h264(
             frame_interval,
         ):
             yield chunk
+    elif plan.needs_camera and not device_playback:
+        logger.info(
+            "Playback %s: histórico omitido (marca sin playback en dispositivo)",
+            camera.camera_id,
+        )
 
 
 async def _emit_packets_realtime(

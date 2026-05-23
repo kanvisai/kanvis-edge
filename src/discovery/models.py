@@ -44,6 +44,13 @@ class CameraSource(BaseModel):
         default="101",
         description="Canal lógico RTSP del fabricante (Annke/Hik: 101 main, 102 sub)",
     )
+    playback_channel: str = Field(
+        default="",
+        description=(
+            "Canal en la URL de playback del edge si difiere del vivo "
+            "(p. ej. vivo stream1, playback inventado 101)"
+        ),
+    )
     time_offset_minutes: float = Field(
         default=0.0,
         description="Desfase horario para playback del fabricante",

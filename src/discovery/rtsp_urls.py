@@ -79,12 +79,15 @@ def build_camera_rtsp_url(
             host, port = source.host, source.port
 
         user, pwd = _credentials_for_target(source, camera, target)
+        ch = source.channel or "101"
+        if mode == "playback":
+            ch = (source.playback_channel or "").strip() or ch
         values = build_rtsp_template_values(
             username=user,
             password=pwd,
             host=host,
             port=port,
-            channel=source.channel or "101",
+            channel=ch,
         )
         if mode == "playback" and (starttime is None or endtime is None):
             now = datetime.now(timezone.utc)

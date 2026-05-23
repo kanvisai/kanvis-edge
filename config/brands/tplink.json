@@ -10,8 +10,9 @@
       "rtsp": {
         "stream_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/{{channel}}",
         "playback_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/Streaming/tracks/{{channel}}?starttime={{starttime}}&endtime={{endtime}}",
-       "time_format": "YYYY-MM-DDTHH:mm:ss[Z]",
-        "requires_utc": false
+        "time_format": "YYYY-MM-DDTHH:mm:ss[Z]",
+        "requires_utc": false,
+        "device_playback_supported": false
       }
     }
   }

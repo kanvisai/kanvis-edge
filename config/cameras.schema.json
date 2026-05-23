@@ -21,6 +21,10 @@
           "brand": { "type": "string" },
           "model": { "type": "string" },
           "channel": { "type": "string", "default": "101" },
+          "playback_channel": {
+            "type": "string",
+            "description": "Ruta playback edge (p. ej. 101) si el vivo usa otro id (stream1)"
+          },
           "time_offset_minutes": { "type": "number", "default": 0 },
           "path": { "type": "string" },
           "transport": { "type": "string", "default": "tcp" },
