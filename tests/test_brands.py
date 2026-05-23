@@ -69,6 +69,52 @@ def test_render_annke_playback_utc() -> None:
     assert "endtime=2024-06-01T10:05:00Z" in url
 
 
+def test_render_tplink_playback_local(monkeypatch) -> None:
+    from zoneinfo import ZoneInfo
+
+    from src.brands.time_format import _local_tz
+
+    madrid = ZoneInfo("Europe/Madrid")
+    monkeypatch.setattr("src.brands.time_format._local_tz", lambda: madrid)
+
+    root = Path(__file__).resolve().parents[1] / "config" / "brands"
+    profile = load_brand_profile("tplink", root)
+    values = build_rtsp_template_values(
+        username="camera",
+        password="camera69",
+        host="192.168.1.100",
+        port=8554,
+        channel="stream1",
+    )
+    # 20:00 UTC = 22:00 CEST (verano)
+    start = datetime(2026, 5, 23, 20, 0, 0, tzinfo=timezone.utc)
+    end = start + timedelta(seconds=36)
+    url = render_rtsp_url(
+        profile,
+        mode="playback",
+        values=values,
+        starttime=start,
+        endtime=end,
+    )
+    assert "Streaming/tracks/stream1" in url
+    assert "starttime=2026-05-23T22:00:00" in url
+    assert "endtime=2026-05-23T22:00:36" in url
+    assert "Z" not in url.split("?", 1)[1]
+
+    from src.brands.time_format import parse_instant
+
+    parsed_start, _ = (
+        parse_instant(
+            "2026-05-23T22:00:00",
+            time_format=profile.protocols.rtsp.time_format,
+            requires_utc=profile.protocols.rtsp.requires_utc,
+        ),
+        None,
+    )
+    assert parsed_start == start
+    _ = _local_tz
+
+
 def _annke_camera() -> CameraRecord:
     return CameraRecord(
         camera_id="cam-annke",

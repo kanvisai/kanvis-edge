@@ -4,7 +4,7 @@
 #
 # Requisitos en el guardia:
 #   RTSP_GATEWAY_ENABLED=true en /etc/kanvis-edge/env
-#   Cámara con output.gateway.enabled=true, brand tplink, playback_channel=101
+#   Cámara con output.gateway.enabled=true, brand tplink, channel=stream1
 #   Broadcast activo (búfer llenándose) o ingesta por gateway
 #   POST /api/v1/gateway/reload tras cambiar config
 #
@@ -13,7 +13,9 @@
 #
 # Desde internet (misma URL, IP/puerto públicos + PF en el router):
 #   EDGE_HOST=176.85.146.32 EDGE_PORT=55422 ./scripts/edge-playback-mpv.sh
-#   (55422 si RTSP_GATEWAY_WAN_PORT≠8554; prueba nc -zv HOST PORT antes de mpv)
+#
+# PLAYBACK_CHANNEL: mismo id que en el panel (TP-Link suele ser stream1).
+# PLAYBACK_TIME=local (defecto, TP-Link) | utc (Annke/Hik y similares)
 
 set -euo pipefail
 
@@ -21,17 +23,36 @@ EDGE_HOST="${EDGE_HOST:-192.168.1.100}"
 EDGE_PORT="${EDGE_PORT:-8554}"
 RTSP_USER="${RTSP_USER:-camera}"
 RTSP_PASS="${RTSP_PASS:-camera69}"
-# Canal en la URL inventada /Streaming/tracks/<id> (cameras.json → playback_channel)
-PLAYBACK_CHANNEL="${PLAYBACK_CHANNEL:-101}"
-# Ventana: últimos N s desde el búfer + M s hacia delante (vivo en el edge)
+PLAYBACK_CHANNEL="${PLAYBACK_CHANNEL:-stream1}"
 START_OFFSET_SEC="${START_OFFSET_SEC:-6}"
 PLAYBACK_DURATION_SEC="${PLAYBACK_DURATION_SEC:-30}"
+PLAYBACK_TIME="${PLAYBACK_TIME:-local}"
+
+_fmt_local() {
+  date -d "@$1" +"%Y-%m-%d %H:%M:%S %Z" 2>/dev/null || date -r "$1" +"%Y-%m-%d %H:%M:%S %Z"
+}
+
+_fmt_utc_param() {
+  date -u -d "@$1" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -r "$1" +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+_fmt_local_param() {
+  date -d "@$1" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || date -r "$1" +"%Y-%m-%dT%H:%M:%S"
+}
 
 now=$(date +%s)
 start_epoch=$((now - START_OFFSET_SEC))
 end_epoch=$((now + PLAYBACK_DURATION_SEC))
-starttime=$(date -u -d "@${start_epoch}" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -r "${start_epoch}" +"%Y-%m-%dT%H:%M:%SZ")
-endtime=$(date -u -d "@${end_epoch}" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -r "${end_epoch}" +"%Y-%m-%dT%H:%M:%SZ")
+
+if [[ "${PLAYBACK_TIME}" == "utc" ]]; then
+  starttime=$(_fmt_utc_param "${start_epoch}")
+  endtime=$(_fmt_utc_param "${end_epoch}")
+  time_note="UTC (Z)"
+else
+  starttime=$(_fmt_local_param "${start_epoch}")
+  endtime=$(_fmt_local_param "${end_epoch}")
+  time_note="hora local (sin Z), como TP-Link"
+fi
 
 PATH_RTSP="Streaming/tracks/${PLAYBACK_CHANNEL}"
 URL="rtsp://${RTSP_USER}:${RTSP_PASS}@${EDGE_HOST}:${EDGE_PORT}/${PATH_RTSP}?starttime=${starttime}&endtime=${endtime}"
@@ -40,16 +61,20 @@ echo "========================================="
 echo " Kanvis Edge — playback (búfer + vivo)"
 echo "========================================="
 echo "Edge (gateway RTSP)             : ${EDGE_HOST}:${EDGE_PORT}"
-echo "Hora de lanzamiento             : $(date -d "@${now}" +"%H:%M:%S" 2>/dev/null || date -r "${now}" +"%H:%M:%S")"
-echo "Inicio playback (-${START_OFFSET_SEC}s)     : $(date -d "@${start_epoch}" +"%H:%M:%S" 2>/dev/null || date -r "${start_epoch}" +"%H:%M:%S")"
-echo "Fin playback (+${PLAYBACK_DURATION_SEC}s)   : $(date -d "@${end_epoch}" +"%H:%M:%S" 2>/dev/null || date -r "${end_epoch}" +"%H:%M:%S")"
+echo "Canal playback                  : ${PLAYBACK_CHANNEL}  (path: ${PATH_RTSP})"
+echo "Hora local (ahora)              : $(_fmt_local "${now}")"
+echo "Inicio ventana (-${START_OFFSET_SEC}s)      : $(_fmt_local "${start_epoch}")"
+echo "Fin ventana (+${PLAYBACK_DURATION_SEC}s)    : $(_fmt_local "${end_epoch}")"
+echo "Parámetros URL (${time_note})"
+echo "  starttime=${starttime}"
+echo "  endtime=${endtime}"
 echo "========================================="
 echo "URL:"
 echo "${URL}"
 echo "========================================="
 echo ""
-echo "Comprobación rápida (en el edge): ss -tlnp | grep ${EDGE_PORT}"
-echo "Si connection refused: activa RTSP_GATEWAY_ENABLED y gateway.reload"
+echo "Comprobación rápida: nc -zv ${EDGE_HOST} ${EDGE_PORT}"
+echo "En el edge: gateway/status → running:true y broadcast activo"
 echo ""
 echo "Lanzando MPV (RTSP-TCP, sin audio)..."
 

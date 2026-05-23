@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 _TIME_FORMAT_TO_STRFTIME: dict[str, str] = {
     "YYYY-MM-DDTHH:mm:ss[Z]": "%Y-%m-%dT%H:%M:%SZ",
@@ -14,6 +15,17 @@ _TIME_FORMAT_TO_STRFTIME: dict[str, str] = {
 }
 
 
+def _local_tz() -> timezone:
+    """Zona horaria del edge (p. ej. Europe/Madrid); usada si requires_utc=false."""
+    tz = datetime.now().astimezone().tzinfo
+    if tz is not None:
+        return tz
+    try:
+        return ZoneInfo("Europe/Madrid")
+    except Exception:
+        return timezone.utc
+
+
 def strftime_pattern(time_format: str) -> str:
     key = time_format.strip()
     if key not in _TIME_FORMAT_TO_STRFTIME:
@@ -21,6 +33,13 @@ def strftime_pattern(time_format: str) -> str:
             f"Unsupported time_format {time_format!r}; supported: {sorted(_TIME_FORMAT_TO_STRFTIME)}"
         )
     return _TIME_FORMAT_TO_STRFTIME[key]
+
+
+def _output_strftime_pattern(time_format: str, *, requires_utc: bool) -> str:
+    pattern = strftime_pattern(time_format)
+    if not requires_utc and pattern.endswith("Z"):
+        return pattern[:-1]
+    return pattern
 
 
 def parse_instant(
@@ -43,8 +62,8 @@ def parse_instant(
             raise ValueError(f"No se pudo parsear {value!r} con {time_format!r}") from exc
         if requires_utc:
             dt = dt.replace(tzinfo=timezone.utc)
-        elif dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.replace(tzinfo=_local_tz())
         return dt.astimezone(timezone.utc)
 
     return _parse_loose_instant(value)
@@ -86,4 +105,6 @@ def format_instant(
         dt = dt + timedelta(minutes=float(time_offset_minutes))
     if requires_utc:
         dt = dt.astimezone(timezone.utc)
-    return dt.strftime(strftime_pattern(time_format))
+    else:
+        dt = dt.astimezone(_local_tz())
+    return dt.strftime(_output_strftime_pattern(time_format, requires_utc=requires_utc))

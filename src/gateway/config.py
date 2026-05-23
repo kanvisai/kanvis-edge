@@ -190,7 +190,9 @@ def build_gateway_access_urls(
     El playback incluye starttime/endtime de ejemplo; el cliente debe recalcularlos.
     """
     from datetime import datetime, timedelta, timezone
+    from urllib.parse import parse_qs, urlparse
 
+    from src.brands import default_brands_dir, load_brand_profile
     from src.discovery.rtsp_urls import (
         build_camera_rtsp_url,
         gateway_playback_path,
@@ -232,6 +234,22 @@ def build_gateway_access_urls(
         playback_wan = replace_rtsp_host_port(playback_tpl, pub, wan_port)
 
     mpv_tpl = 'mpv --rtsp-transport=tcp --no-audio "{url}"'
+    pb_qs = parse_qs(urlparse(playback_lan).query)
+    ex_start = (pb_qs.get("starttime") or [""])[0]
+    ex_end = (pb_qs.get("endtime") or [""])[0]
+    brand_slug = (camera.source.brand or "").strip().lower()
+    requires_utc = True
+    if brand_slug:
+        try:
+            profile = load_brand_profile(brand_slug, default_brands_dir(settings.config_dir))
+            requires_utc = profile.protocols.rtsp.requires_utc
+        except FileNotFoundError:
+            pass
+    time_kind = "UTC" if requires_utc else "hora local del edge"
+    time_note = (
+        f"Ventana de ejemplo (−6 s / +30 s, {time_kind}). "
+        "Genera starttime/endtime nuevos en cada petición."
+    )
     return {
         "lan_port": lan_port,
         "wan_port": wan_port,
@@ -248,11 +266,10 @@ def build_gateway_access_urls(
             "url_wan": playback_wan or None,
             "mpv_lan": mpv_tpl.format(url=playback_lan),
             "mpv_wan": mpv_tpl.format(url=playback_wan) if playback_wan else None,
-            "example_starttime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "example_endtime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "example_starttime": ex_start,
+            "example_endtime": ex_end,
             "note": (
-                "Ventana de ejemplo (−6 s / +30 s, UTC). Genera starttime/endtime nuevos "
-                "en cada petición. El edge sirve el tramo reciente desde el búfer RAM."
+                f"{time_note} El edge sirve el tramo reciente desde el búfer RAM."
             ),
         },
     }
