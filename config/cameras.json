@@ -41,7 +41,7 @@
       }
     },
     "buffer": {
-      "duration_seconds": 60.0,
+      "duration_seconds": 180.0,
       "default_playback_offset_sec": 6.0,
       "event_pre_seconds": 6.0,
       "event_post_seconds": 24.0

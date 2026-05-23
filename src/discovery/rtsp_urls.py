@@ -115,6 +115,29 @@ def build_camera_rtsp_url(
     return source.rtsp_url_legacy()
 
 
+def gateway_stream_path(camera: CameraRecord, settings: AppSettings) -> str:
+    """Ruta RTSP de vivo en el edge (sin host ni query)."""
+    url = build_camera_rtsp_url(camera, mode="stream", target="edge", settings=settings)
+    return rtsp_path_from_url(url)
+
+
+def gateway_playback_path(camera: CameraRecord, settings: AppSettings) -> str:
+    """Ruta RTSP de playback en el edge (sin host ni query)."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    url = build_camera_rtsp_url(
+        camera,
+        mode="playback",
+        target="edge",
+        settings=settings,
+        starttime=now - timedelta(seconds=1),
+        endtime=now,
+    )
+    path = urlparse(url).path or "/"
+    return path.lstrip("/")
+
+
 def default_gateway_path(camera: CameraRecord, settings: AppSettings | None = None) -> str:
     """Ruta pública RTSP en el edge (misma estructura que el fabricante si hay marca)."""
     gw_path = camera.output.gateway.path.strip("/")

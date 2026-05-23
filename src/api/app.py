@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from src.api.dispatcher import VideoDispatcher
+from src.api.playback_routes import router as playback_router
 from src.api.routes import router
 from src.api.webui_routes import STATIC_DIR, router as webui_router
 from src.api.testing_routes import router as testing_router
@@ -133,6 +134,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     app.include_router(webui_router)
     app.include_router(router)
+    app.include_router(playback_router)
     app.include_router(webrtc_router)
     app.include_router(testing_router)
     return app

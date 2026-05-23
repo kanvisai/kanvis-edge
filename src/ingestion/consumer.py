@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import av
 
 from src.config_loader import AppSettings
-from src.discovery.models import CameraRecord
+from src.discovery.models import CameraRecord, ExternalAccessMode
 from src.ingestion.bridge import PacketBridge
 from src.ingestion.buffer import PacketCircularBuffer, RawPacket
 from src.ingestion.metrics import IngestMetrics
@@ -249,10 +249,17 @@ class StreamConsumerManager:
             return
 
         cameras = await self._repository.list_enabled()
+        gateway_ingest_ids = {
+            c.camera_id
+            for c in cameras
+            if c.output.gateway.enabled
+            and c.output.gateway.access_mode != ExternalAccessMode.DIRECT
+        }
         ingest_cameras = [
             c
             for c in cameras
             if c.camera_id in self._broadcast_ingest_ids
+            or c.camera_id in gateway_ingest_ids
         ]
         active_ids = {c.camera_id for c in ingest_cameras}
 

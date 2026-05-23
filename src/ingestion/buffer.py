@@ -76,10 +76,25 @@ class PacketCircularBuffer:
 
     def snapshot_last_seconds(self, seconds: float) -> list[RawPacket]:
         """Ventana [ahora - seconds, ahora] sin vaciar el búfer."""
+        return self.snapshot_between_ages(seconds, 0.0)
+
+    def snapshot_between_ages(
+        self,
+        start_sec_ago: float,
+        end_sec_ago: float,
+    ) -> list[RawPacket]:
+        """
+        Paquetes entre end_sec_ago y start_sec_ago en el pasado (orden cronológico).
+
+        Ej.: start_sec_ago=6, end_sec_ago=0 → últimos 6 s hasta ahora.
+        """
+        if start_sec_ago < end_sec_ago:
+            start_sec_ago, end_sec_ago = end_sec_ago, start_sec_ago
         now = time.monotonic()
-        cutoff = now - max(0.01, seconds)
+        cutoff_old = now - max(0.0, start_sec_ago)
+        cutoff_new = now - max(0.0, end_sec_ago)
         with self._lock:
-            return [p for p in self._deque if p.captured_at >= cutoff]
+            return [p for p in self._deque if cutoff_old <= p.captured_at <= cutoff_new]
 
     def drain_atomic(self) -> list[RawPacket]:
         """Vacía todo el búfer (uso legacy; preferir snapshot_last_seconds)."""

@@ -25,6 +25,7 @@ PUBLIC_PATHS = frozenset(
         "/",
         "/api/v1/health",
         "/api/v1/webui/login",
+        "/api/v1/internal/rtsp-playback",
         "/favicon.ico",
     }
 )

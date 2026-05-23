@@ -8,7 +8,11 @@ import yaml
 
 from src.config_loader import AppSettings
 from src.discovery.models import CameraRecord, ExternalAccessMode
-from src.discovery.rtsp_urls import default_gateway_path
+from src.discovery.rtsp_urls import (
+    default_gateway_path,
+    gateway_playback_path,
+    gateway_stream_path,
+)
 
 
 def _gateway_path(camera: CameraRecord, settings: AppSettings | None = None) -> str:
@@ -29,36 +33,79 @@ def cameras_for_gateway(cameras: list[CameraRecord]) -> list[CameraRecord]:
     ]
 
 
+def build_playback_run_on_demand(settings: AppSettings) -> str:
+    """FFmpeg publica en MediaMTX leyendo H.264 desde el API interno (búfer + vivo)."""
+    api_port = settings.edge_api_port
+    ff = settings.ffmpeg_path
+    return (
+        f"{ff} -loglevel warning -nostdin -re -f h264 "
+        f"-i http://127.0.0.1:{api_port}/api/v1/internal/rtsp-playback"
+        "?mtx_path=$MTX_PATH&mtx_query=$MTX_QUERY "
+        f"-c copy -an -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH"
+    )
+
+
+def _read_auth_entry(gw) -> dict[str, Any]:
+    entry: dict[str, Any] = {}
+    read_user = gw.username or ""
+    read_pass = gw.password.get_secret_value()
+    if read_user:
+        entry["readUser"] = read_user
+    if read_pass:
+        entry["readPass"] = read_pass
+    return entry
+
+
 def generate_mediamtx_config(
     cameras: list[CameraRecord],
     settings: AppSettings,
 ) -> dict[str, Any]:
     """
-    Config MediaMTX: un listener RTSP y un path por cámara (pull on-demand).
+    Config MediaMTX: vivo (pull cámara) y playback (runOnDemand → búfer edge).
 
     Las cámaras con external_access=direct no entran aquí (PF directo a la cámara).
     """
     host = settings.rtsp_gateway_listen_host
     port = settings.rtsp_gateway_port
     paths: dict[str, Any] = {}
+    playback_cmd = build_playback_run_on_demand(settings)
 
     for camera in cameras_for_gateway(cameras):
         gw = camera.output.gateway
-        path_name = _gateway_path(camera, settings)
-        entry: dict[str, Any] = {
-            "source": camera.rtsp_url(settings=settings),
-            "sourceProtocol": camera.source.transport or "tcp",
-            "sourceOnDemand": gw.source_on_demand,
-            "sourceOnDemandStartTimeout": "10s",
-            "sourceOnDemandCloseAfter": f"{int(gw.source_on_demand_close_after)}s",
-        }
-        read_user = gw.username or ""
-        read_pass = gw.password.get_secret_value()
-        if read_user:
-            entry["readUser"] = read_user
-        if read_pass:
-            entry["readPass"] = read_pass
-        paths[path_name] = entry
+        brand = (camera.source.brand or "").strip()
+
+        if brand:
+            try:
+                stream_path = gateway_stream_path(camera, settings)
+                paths[stream_path] = {
+                    "source": camera.rtsp_url(settings=settings),
+                    "sourceProtocol": camera.source.transport or "tcp",
+                    "sourceOnDemand": gw.source_on_demand,
+                    "sourceOnDemandStartTimeout": "10s",
+                    "sourceOnDemandCloseAfter": f"{int(gw.source_on_demand_close_after)}s",
+                    **_read_auth_entry(gw),
+                }
+                playback_path = gateway_playback_path(camera, settings)
+                paths[playback_path] = {
+                    "runOnDemand": playback_cmd,
+                    "runOnDemandRestart": False,
+                    "runOnDemandStartTimeout": "20s",
+                    "runOnDemandCloseAfter": f"{int(gw.source_on_demand_close_after)}s",
+                    **_read_auth_entry(gw),
+                }
+            except (FileNotFoundError, ValueError):
+                brand = ""
+
+        if not brand:
+            path_name = _gateway_path(camera, settings)
+            paths[path_name] = {
+                "source": camera.rtsp_url(settings=settings),
+                "sourceProtocol": camera.source.transport or "tcp",
+                "sourceOnDemand": gw.source_on_demand,
+                "sourceOnDemandStartTimeout": "10s",
+                "sourceOnDemandCloseAfter": f"{int(gw.source_on_demand_close_after)}s",
+                **_read_auth_entry(gw),
+            }
 
     return {
         "logLevel": settings.mediamtx_log_level,
@@ -84,13 +131,25 @@ def gateway_config_signature(
         str(settings.rtsp_gateway_port),
         settings.mediamtx_log_level,
     ]
+    parts.append(build_playback_run_on_demand(settings))
     for cam in sorted(cameras_for_gateway(cameras), key=lambda c: c.camera_id):
         gw = cam.output.gateway
+        brand = (cam.source.brand or "").strip()
+        paths_sig = [_gateway_path(cam, settings), cam.rtsp_url(settings=settings)]
+        if brand:
+            try:
+                paths_sig.extend(
+                    [
+                        gateway_stream_path(cam, settings),
+                        gateway_playback_path(cam, settings),
+                    ]
+                )
+            except (FileNotFoundError, ValueError):
+                pass
         parts.extend(
             [
                 cam.camera_id,
-                cam.rtsp_url(settings=settings),
-                _gateway_path(cam, settings),
+                *paths_sig,
                 str(gw.source_on_demand),
                 str(int(gw.source_on_demand_close_after)),
                 gw.username,

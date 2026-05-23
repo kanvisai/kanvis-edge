@@ -1,0 +1,111 @@
+"""Playback RTSP interno (MediaMTX runOnDemand → FFmpeg → este endpoint)."""
+
+from __future__ import annotations
+
+import logging
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+from starlette.status import HTTP_403_FORBIDDEN
+
+from src.config_loader import AppSettings, get_settings
+from src.discovery.repository import CameraRepository
+from src.ingestion.consumer import StreamConsumerManager
+from src.playback.parse import parse_playback_query_string
+from src.playback.resolver import brand_profile_for_camera, find_camera_for_gateway_path
+from src.playback.stream import PlaybackStreamError, stream_playback_h264
+from src.schedule.service import OperatingScheduleService, require_operating_now
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/internal", tags=["internal-playback"])
+
+
+def _is_loopback(request: Request) -> bool:
+    client = request.client
+    if client is None:
+        return False
+    host = (client.host or "").strip()
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+def get_repository(request: Request) -> CameraRepository:
+    return request.app.state.camera_repository
+
+
+def get_consumer_manager(request: Request) -> StreamConsumerManager:
+    return request.app.state.consumer_manager
+
+
+def get_schedule_service(request: Request) -> OperatingScheduleService:
+    return request.app.state.operating_schedule_service
+
+
+@router.get("/rtsp-playback")
+async def internal_rtsp_playback(
+    request: Request,
+    mtx_path: str = Query(..., description="MTX_PATH de MediaMTX"),
+    mtx_query: str = Query(default="", description="MTX_QUERY (starttime/endtime)"),
+    settings: Annotated[AppSettings, Depends(get_settings)],
+    repository: Annotated[CameraRepository, Depends(get_repository)],
+    manager: Annotated[StreamConsumerManager, Depends(get_consumer_manager)],
+    schedule_svc: Annotated[OperatingScheduleService, Depends(get_schedule_service)],
+) -> StreamingResponse:
+    """
+    Stream H.264 Annex-B para FFmpeg (runOnDemand de MediaMTX).
+
+    Solo loopback. Sirve búfer reciente + cola en vivo + playback de cámara si aplica.
+    """
+    if not _is_loopback(request):
+        raise HTTPException(
+            status_code=HTTP_403_FORBIDDEN,
+            detail="Solo accesible desde localhost (MediaMTX runOnDemand)",
+        )
+    require_operating_now(schedule_svc)
+
+    cameras = await repository.list_cameras()
+    camera = find_camera_for_gateway_path(mtx_path, cameras, settings)
+    if camera is None:
+        raise HTTPException(status_code=404, detail=f"Ruta RTSP desconocida: {mtx_path}")
+
+    profile = brand_profile_for_camera(camera, settings)
+    try:
+        start, end = parse_playback_query_string(mtx_query, profile=profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    consumer = manager.get_consumer(camera.camera_id)
+    buffer = manager.get_buffer(camera.camera_id)
+    if consumer is None or buffer is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Ingesta/búfer no activos para esta cámara; activa broadcast o "
+                "gateway con ingesta automática"
+            ),
+        )
+
+    async def _body():
+        try:
+            async for chunk in stream_playback_h264(
+                camera=camera,
+                consumer=consumer,
+                buffer=buffer,
+                settings=settings,
+                start=start,
+                end=end,
+            ):
+                yield chunk
+        except PlaybackStreamError as exc:
+            logger.warning("Playback RTSP %s: %s", camera.camera_id, exc)
+            return
+
+    return StreamingResponse(
+        _body(),
+        media_type="video/h264",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Kanvis-Playback-Camera": camera.camera_id,
+        },
+    )

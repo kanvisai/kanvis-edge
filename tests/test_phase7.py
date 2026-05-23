@@ -73,6 +73,36 @@ def test_generate_mediamtx_config_paths() -> None:
     assert cfg["paths"]["cam-01"]["sourceOnDemand"] is True
 
 
+def test_generate_mediamtx_config_brand_playback_path() -> None:
+    from pydantic import SecretStr
+
+    from src.discovery.models import CameraBufferSettings, CameraSource
+
+    settings = AppSettings(RTSP_GATEWAY_ENABLED=True, RTSP_GATEWAY_PORT=55411)
+    cam = CameraRecord(
+        camera_id="cam-annke",
+        enabled=True,
+        source=CameraSource(
+            host="192.168.1.50",
+            port=554,
+            username="kanvis",
+            password=SecretStr("secret"),
+            brand="annke",
+            channel="101",
+        ),
+        output=CameraOutput(
+            protocol=OutputProtocol.RTSP,
+            gateway=CameraGatewayOutput(enabled=True, access_mode=ExternalAccessMode.GATEWAY),
+        ),
+        buffer=CameraBufferSettings(),
+    )
+    cfg = generate_mediamtx_config([cam], settings)
+    assert "Streaming/channels/101" in cfg["paths"]
+    assert "Streaming/tracks/101" in cfg["paths"]
+    assert "runOnDemand" in cfg["paths"]["Streaming/tracks/101"]
+    assert cfg["paths"]["Streaming/tracks/101"]["runOnDemandRestart"] is False
+
+
 def test_render_yaml_contains_path() -> None:
     yaml_text = render_mediamtx_yaml(generate_mediamtx_config([_camera()], AppSettings()))
     assert "cam-01:" in yaml_text

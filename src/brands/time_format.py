@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 _TIME_FORMAT_TO_STRFTIME: dict[str, str] = {
@@ -20,6 +21,56 @@ def strftime_pattern(time_format: str) -> str:
             f"Unsupported time_format {time_format!r}; supported: {sorted(_TIME_FORMAT_TO_STRFTIME)}"
         )
     return _TIME_FORMAT_TO_STRFTIME[key]
+
+
+def parse_instant(
+    value: str,
+    *,
+    time_format: str | None = None,
+    requires_utc: bool = True,
+) -> datetime:
+    """Parsea marcas de tiempo de plantillas RTSP de fabricante."""
+    text = value.strip()
+    if time_format:
+        pattern = strftime_pattern(time_format)
+        if text.endswith("Z") and "[Z]" in time_format:
+            text = text[:-1]
+        if text.endswith("Z") and pattern.endswith("Z"):
+            text = text[:-1]
+        try:
+            dt = datetime.strptime(text, pattern.replace("Z", ""))
+        except ValueError as exc:
+            raise ValueError(f"No se pudo parsear {value!r} con {time_format!r}") from exc
+        if requires_utc:
+            dt = dt.replace(tzinfo=timezone.utc)
+        elif dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    return _parse_loose_instant(value)
+
+
+_ISO_FALLBACK = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z?$",
+    re.IGNORECASE,
+)
+
+
+def _parse_loose_instant(value: str) -> datetime:
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        m = _ISO_FALLBACK.match(value.strip())
+        if not m:
+            raise ValueError(f"Marca de tiempo no reconocida: {value!r}") from None
+        y, mo, d, h, mi, s = (int(x) for x in m.groups())
+        dt = datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def format_instant(
