@@ -1237,7 +1237,7 @@ async def gateway_status(
     settings: Annotated[AppSettings, Depends(get_app_settings)],
 ) -> dict:
     """Estado del proxy RTSP unificado (MediaMTX)."""
-    cameras = await repo.list_cameras()
+    cameras = await repo.list_all()
     status = gateway_manager.get_status(cameras)
     status["install_hint"] = (
         "WAN:" + str(settings.rtsp_gateway_wan_port)

@@ -68,7 +68,7 @@ class GatewayManager:
             return
 
         async with self._lock:
-            cameras = await self._repository.list_cameras()
+            cameras = await self._repository.list_all()
             sig = gateway_config_signature(cameras, self._settings)
             active = [c for c in cameras if c.output.gateway.enabled]
 

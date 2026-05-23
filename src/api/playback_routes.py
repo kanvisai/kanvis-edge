@@ -64,7 +64,7 @@ async def internal_rtsp_playback(
         )
     require_operating_now(schedule_svc)
 
-    cameras = await repository.list_cameras()
+    cameras = await repository.list_all()
     camera = find_camera_for_gateway_path(mtx_path, cameras, settings)
     if camera is None:
         raise HTTPException(status_code=404, detail=f"Ruta RTSP desconocida: {mtx_path}")
