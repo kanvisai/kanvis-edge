@@ -6,7 +6,7 @@ import asyncio
 import base64
 import logging
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
@@ -29,7 +29,7 @@ from src.discovery.rtsp_urls import default_gateway_path
 from src.discovery.repository import CameraRepository
 from src.ingestion.consumer import StreamConsumerManager
 from src.discovery.scanner import NetworkScanner
-from src.gateway.config import build_gateway_client_url
+from src.gateway.config import build_gateway_access_urls, build_gateway_client_url
 from src.gateway.manager import GatewayManager
 from src.relay.manager import RelayManager
 from src.webrtc.manager import WebRtcManager
@@ -731,6 +731,7 @@ def _build_camera_access_info(
     panel_urls: dict[str, str],
     settings: AppSettings,
     relay_manager: RelayManager,
+    gateway_manager: GatewayManager | None = None,
     preview: bool = False,
 ) -> dict:
     api_base = panel_urls["api_base"]
@@ -823,6 +824,46 @@ def _build_camera_access_info(
         else str(settings.resolved_cameras_json)
     )
 
+    gateway_block: dict | None = None
+    if settings.rtsp_gateway_enabled:
+        lan_host = panel_urls.get("edge_lan_ip") or panel_urls.get("lan_ip", "").split("://")[-1].split(":")[0]
+        public_host = panel_urls.get("public_ip") or ""
+        urls = build_gateway_access_urls(
+            camera,
+            settings,
+            lan_host=lan_host,
+            public_host=public_host,
+        )
+        gw_running = False
+        if gateway_manager is not None:
+            gw_running = bool(
+                gateway_manager.is_enabled and gateway_manager.get_status().get("running")
+            )
+        gateway_block: dict[str, Any] = {
+            "global_enabled": True,
+            "camera_enabled": camera.output.gateway.enabled,
+            "running": gw_running,
+            "lan_host": lan_host,
+            "public_host": public_host or None,
+            "hints": [
+                "Usa estas URLs desde cualquier PC en la LAN (o IP pública + reenvío puerto "
+                f"WAN:{settings.rtsp_gateway_wan_port} → edge:{settings.rtsp_gateway_port}).",
+                "Vivo: pull directo al gateway. Playback: búfer reciente + cola en vivo "
+                "(starttime/endtime en la query).",
+                "Activa broadcast o ingesta gateway para que el búfer tenga datos.",
+            ],
+        }
+        if "error" in urls:
+            gateway_block["config_error"] = urls["error"]
+        else:
+            gateway_block.update(urls)
+        if not camera.output.gateway.enabled:
+            gateway_block["hints"].insert(
+                0,
+                "Activa output.gateway.enabled en esta cámara y POST /api/v1/gateway/reload "
+                "para registrar las rutas en MediaMTX.",
+            )
+
     out: dict = {
         "camera_id": camera_id,
         "label": camera.label,
@@ -831,6 +872,7 @@ def _build_camera_access_info(
         "device_rtsp_masked": device_rtsp_masked,
         "relay": relay_block,
         "relay_preview": relay_preview,
+        "gateway": gateway_block,
         "webrtc": webrtc_block,
         "panel_urls": {
             "public": panel_urls.get("public_url") or api_base,
@@ -854,6 +896,7 @@ async def camera_access_info(
     repo: Annotated[CameraRepository, Depends(get_repository)],
     settings: Annotated[AppSettings, Depends(get_app_settings)],
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+    gateway_manager: Annotated[GatewayManager, Depends(get_gateway_manager)],
 ) -> dict:
     """Datos de conexión para pruebas (RTSP cámara, relay, WebRTC)."""
     camera = await repo.get(camera_id)
@@ -866,6 +909,7 @@ async def camera_access_info(
         panel_urls=panel_urls,
         settings=settings,
         relay_manager=relay_manager,
+        gateway_manager=gateway_manager,
     )
 
 
@@ -877,6 +921,7 @@ async def camera_access_info_preview(
     repo: Annotated[CameraRepository, Depends(get_repository)],
     settings: Annotated[AppSettings, Depends(get_app_settings)],
     relay_manager: Annotated[RelayManager, Depends(get_relay_manager)],
+    gateway_manager: Annotated[GatewayManager, Depends(get_gateway_manager)],
 ) -> dict:
     """Vista previa de URLs con IP/credenciales del formulario (sin guardar)."""
     camera = await repo.get(camera_id)
@@ -890,6 +935,7 @@ async def camera_access_info_preview(
         panel_urls=panel_urls,
         settings=settings,
         relay_manager=relay_manager,
+        gateway_manager=gateway_manager,
         preview=True,
     )
 

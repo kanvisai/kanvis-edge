@@ -8,9 +8,12 @@
 #   Broadcast activo (búfer llenándose) o ingesta por gateway
 #   POST /api/v1/gateway/reload tras cambiar config
 #
-# Uso:
-#   ./scripts/edge-playback-mpv.sh
-#   EDGE_HOST=192.168.1.100 PLAYBACK_CHANNEL=101 ./scripts/edge-playback-mpv.sh
+# Uso (desde cualquier PC en la LAN; no hace falta estar en el guardia):
+#   EDGE_HOST=192.168.1.100 ./scripts/edge-playback-mpv.sh
+#
+# Desde internet (misma URL, IP/puerto públicos + PF en el router):
+#   EDGE_HOST=176.85.146.32 EDGE_PORT=55422 ./scripts/edge-playback-mpv.sh
+#   (55422 si RTSP_GATEWAY_WAN_PORT≠8554; prueba nc -zv HOST PORT antes de mpv)
 
 set -euo pipefail
 

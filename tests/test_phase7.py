@@ -121,3 +121,45 @@ def test_gateway_config_signature_changes() -> None:
         AppSettings(RTSP_GATEWAY_PORT=8555),
     )
     assert s1 != s2
+
+
+def test_replace_rtsp_host_port() -> None:
+    from src.gateway.config import replace_rtsp_host_port
+
+    url = "rtsp://user:pass@127.0.0.1:8554/Streaming/tracks/101?starttime=2026-01-01T00:00:00Z"
+    out = replace_rtsp_host_port(url, "192.168.1.100", 8554)
+    assert "192.168.1.100:8554" in out
+    assert "user:pass@" in out
+    assert "starttime=" in out
+
+
+def test_build_gateway_access_urls_annke() -> None:
+    from src.gateway.config import build_gateway_access_urls
+
+    settings = AppSettings(RTSP_GATEWAY_ENABLED=True, RTSP_GATEWAY_PORT=8554)
+    cam = CameraRecord(
+        camera_id="cam-annke",
+        enabled=True,
+        source=CameraSource(
+            host="192.168.1.68",
+            port=554,
+            username="camera",
+            password=SecretStr("camera69"),
+            brand="annke",
+            channel="101",
+            playback_channel="101",
+        ),
+        output=CameraOutput(
+            protocol=OutputProtocol.RTSP,
+            gateway=CameraGatewayOutput(enabled=True),
+        ),
+        buffer=CameraBufferSettings(),
+    )
+    urls = build_gateway_access_urls(
+        cam, settings, lan_host="192.168.1.100", public_host="203.0.113.1"
+    )
+    assert "error" not in urls
+    assert "Streaming/channels/101" in urls["stream"]["url_lan"]
+    assert "Streaming/tracks/101" in urls["playback"]["url_lan"]
+    assert "starttime=" in urls["playback"]["url_lan"]
+    assert "203.0.113.1:55422" in urls["stream"]["url_wan"]

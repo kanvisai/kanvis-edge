@@ -159,6 +159,105 @@ def gateway_config_signature(
     return "|".join(parts)
 
 
+def replace_rtsp_host_port(url: str, host: str, port: int) -> str:
+    """Sustituye host/puerto manteniendo credenciales, path y query."""
+    from urllib.parse import quote, unquote, urlparse, urlunparse
+
+    p = urlparse(url)
+    user = unquote(p.username) if p.username else ""
+    pwd = unquote(p.password) if p.password else ""
+    auth = ""
+    if user:
+        auth = (
+            f"{quote(user, safe='')}:{quote(pwd, safe='')}@"
+            if pwd
+            else f"{quote(user, safe='')}@"
+        )
+    netloc = f"{auth}{host.strip()}:{int(port)}"
+    return urlunparse((p.scheme, netloc, p.path, p.params, p.query, p.fragment))
+
+
+def build_gateway_access_urls(
+    camera: CameraRecord,
+    settings: AppSettings,
+    *,
+    lan_host: str,
+    public_host: str = "",
+) -> dict[str, Any]:
+    """
+    URLs RTSP gateway (vivo + playback) para LAN y WAN.
+
+    El playback incluye starttime/endtime de ejemplo; el cliente debe recalcularlos.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from src.discovery.rtsp_urls import (
+        build_camera_rtsp_url,
+        gateway_playback_path,
+        gateway_stream_path,
+    )
+
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(seconds=6)
+    end = now + timedelta(seconds=30)
+    lan_port = settings.rtsp_gateway_port
+    wan_port = settings.rtsp_gateway_wan_port
+    lan = (lan_host or "").strip()
+    if not lan:
+        return {"error": "Sin IP LAN del edge"}
+
+    try:
+        stream_tpl = build_camera_rtsp_url(
+            camera, mode="stream", target="edge", settings=settings
+        )
+        playback_tpl = build_camera_rtsp_url(
+            camera,
+            mode="playback",
+            target="edge",
+            settings=settings,
+            starttime=start,
+            endtime=end,
+        )
+        stream_path = gateway_stream_path(camera, settings)
+        playback_path = gateway_playback_path(camera, settings)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        return {"error": str(exc)}
+
+    stream_lan = replace_rtsp_host_port(stream_tpl, lan, lan_port)
+    playback_lan = replace_rtsp_host_port(playback_tpl, lan, lan_port)
+    pub = (public_host or "").strip()
+    stream_wan = playback_wan = ""
+    if pub:
+        stream_wan = replace_rtsp_host_port(stream_tpl, pub, wan_port)
+        playback_wan = replace_rtsp_host_port(playback_tpl, pub, wan_port)
+
+    mpv_tpl = 'mpv --rtsp-transport=tcp --no-audio "{url}"'
+    return {
+        "lan_port": lan_port,
+        "wan_port": wan_port,
+        "stream_path": stream_path,
+        "playback_path": playback_path,
+        "stream": {
+            "url_lan": stream_lan,
+            "url_wan": stream_wan or None,
+            "mpv_lan": mpv_tpl.format(url=stream_lan),
+            "mpv_wan": mpv_tpl.format(url=stream_wan) if stream_wan else None,
+        },
+        "playback": {
+            "url_lan": playback_lan,
+            "url_wan": playback_wan or None,
+            "mpv_lan": mpv_tpl.format(url=playback_lan),
+            "mpv_wan": mpv_tpl.format(url=playback_wan) if playback_wan else None,
+            "example_starttime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "example_endtime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "note": (
+                "Ventana de ejemplo (−6 s / +30 s, UTC). Genera starttime/endtime nuevos "
+                "en cada petición. El edge sirve el tramo reciente desde el búfer RAM."
+            ),
+        },
+    }
+
+
 def build_gateway_client_url(
     camera: CameraRecord,
     settings: AppSettings,

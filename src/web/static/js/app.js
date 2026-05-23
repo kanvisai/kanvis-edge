@@ -9,6 +9,9 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const PLAYBACK_OFFSET_SEC = 6;
 
+/** Config global (/api/v1/config) — p. ej. RTSP gateway */
+let edgeConfig = { rtsp_gateway_enabled: false, rtsp_gateway_port: 8554, rtsp_gateway_wan_port: 55422 };
+
 let brandsCache = [];
 let camerasCache = [];
 /** Borradores por IP aún no guardados en API */
@@ -349,7 +352,11 @@ function buildCameraPayload(device, channel, label, opts = {}) {
     },
     output: {
       protocol: broadcastOn ? (webrtcOn ? "webrtc" : "rtsp") : "none",
-      gateway: { enabled: false, access_mode: "gateway", path: id },
+      gateway: {
+        enabled: !!edgeConfig.rtsp_gateway_enabled,
+        access_mode: "gateway",
+        path: id,
+      },
       relay: {
         enabled: relayOn,
         mode: "listen",
@@ -662,6 +669,61 @@ function renderConnectionHints(el, info, mode) {
   html += `<div class="conn-block"><strong>Origen cámara (RTSP)</strong><pre class="conn-pre">${escapeHtml(
     originRtsp
   )}</pre><p class="hint">${escapeHtml(s.mpv || "")}</p></div>`;
+
+  const gw = info.gateway;
+  if (gw?.global_enabled) {
+    const runBadge = gw.running
+      ? '<span class="badge ok">MediaMTX activo</span>'
+      : '<span class="badge warn">MediaMTX no escucha</span>';
+    const camBadge = gw.camera_enabled
+      ? ""
+      : '<span class="badge warn">gateway.enabled=false en esta cámara</span>';
+    html += `<div class="conn-block conn-gateway"><strong>RTSP Gateway (vivo + playback)</strong> ${runBadge} ${camBadge}`;
+    if (gw.config_error) {
+      html += `<p class="hint err-text">${escapeHtml(gw.config_error)}</p>`;
+    }
+    for (const h of gw.hints || []) {
+      html += `<p class="hint">${escapeHtml(h)}</p>`;
+    }
+    if (gw.stream?.url_lan) {
+      html += `<p class="hint"><strong>Vivo (LAN)</strong> — ruta <code>/${escapeHtml(
+        gw.stream_path || ""
+      )}</code></p><pre class="conn-pre">${escapeHtml(gw.stream.url_lan)}</pre>`;
+      html += `<p class="hint">${escapeHtml(gw.stream.mpv_lan || "")}</p>`;
+      html += `<button type="button" class="btn-sm" data-copy-url="${escapeHtml(
+        gw.stream.url_lan
+      )}">Copiar URL vivo</button>`;
+    }
+    if (gw.stream?.url_wan) {
+      html += `<p class="hint"><strong>Vivo (internet)</strong> — puerto WAN ${escapeHtml(
+        String(gw.wan_port || "")
+      )}</p><pre class="conn-pre">${escapeHtml(gw.stream.url_wan)}</pre>`;
+      html += `<p class="hint">${escapeHtml(gw.stream.mpv_wan || "")}</p>`;
+      html += `<button type="button" class="btn-sm" data-copy-url="${escapeHtml(
+        gw.stream.url_wan
+      )}">Copiar URL vivo (WAN)</button>`;
+    }
+    if (gw.playback?.url_lan) {
+      html += `<p class="hint"><strong>Playback con búfer (LAN)</strong> — ruta <code>/${escapeHtml(
+        gw.playback_path || ""
+      )}</code></p><pre class="conn-pre">${escapeHtml(gw.playback.url_lan)}</pre>`;
+      html += `<p class="hint">${escapeHtml(gw.playback.note || "")}</p>`;
+      html += `<p class="hint">${escapeHtml(gw.playback.mpv_lan || "")}</p>`;
+      html += `<button type="button" class="btn-sm" data-copy-url="${escapeHtml(
+        gw.playback.url_lan
+      )}">Copiar URL playback</button>`;
+    }
+    if (gw.playback?.url_wan) {
+      html += `<p class="hint"><strong>Playback (internet)</strong></p><pre class="conn-pre">${escapeHtml(
+        gw.playback.url_wan
+      )}</pre>`;
+      html += `<p class="hint">${escapeHtml(gw.playback.mpv_wan || "")}</p>`;
+      html += `<button type="button" class="btn-sm" data-copy-url="${escapeHtml(
+        gw.playback.url_wan
+      )}">Copiar URL playback (WAN)</button>`;
+    }
+    html += `</div>`;
+  }
 
   if (mode === "rtsp") {
     const r = info.relay?.url_lan ? info.relay : info.relay_preview;
@@ -1722,9 +1784,19 @@ function updateDeviceHeader(session, sys) {
   }
 }
 
+async function loadEdgeConfig() {
+  try {
+    const cfg = await api("/api/v1/config");
+    edgeConfig = { ...edgeConfig, ...cfg };
+  } catch {
+    /* sin bloquear el panel */
+  }
+}
+
 async function initApp() {
   const session = await api("/api/v1/webui/session");
   updateDeviceHeader(session, null);
+  await loadEdgeConfig();
   await loadBrands();
   await loadCameras();
 }
