@@ -5,7 +5,7 @@ Guía completa para desplegar **Kanvis Edge** en un cacharro Linux en tienda (De
 > Resumen de arquitectura y Docker alternativo: [`DESPLIEGUE.md`](DESPLIEGUE.md)  
 > API nube (reporte IP): [`BACKEND_CLOUD_API.md`](BACKEND_CLOUD_API.md)  
 > Port forwarding: [`PORT_FORWARDING.md`](PORT_FORWARDING.md)
-
+> TUNEL ssh -L 8000:127.0.0.1:8000 kanvis@192.168.1.100
 ---
 
 ## Requisitos
