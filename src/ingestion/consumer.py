@@ -87,7 +87,11 @@ class StreamConsumer:
             try:
                 self._live_queue.put_nowait(packet)
             except asyncio.QueueFull:
-                pass
+                try:
+                    self._live_queue.get_nowait()
+                    self._live_queue.put_nowait(packet)
+                except asyncio.QueueEmpty:
+                    pass
 
         self._loop.call_soon_threadsafe(_put)
 
@@ -170,6 +174,28 @@ class StreamConsumer:
             return await asyncio.wait_for(self._live_queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
+
+    async def purge_live_queue_older_than(self, cutoff_mono: float) -> int:
+        """Quita paquetes en cola más antiguos que cutoff_mono (time.monotonic)."""
+        if self._live_queue is None:
+            return 0
+        kept: list[RawPacket] = []
+        dropped = 0
+        while True:
+            try:
+                pkt = self._live_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if pkt.captured_at >= cutoff_mono:
+                kept.append(pkt)
+            else:
+                dropped += 1
+        for pkt in kept:
+            try:
+                self._live_queue.put_nowait(pkt)
+            except asyncio.QueueFull:
+                break
+        return dropped
 
 
 class StreamConsumerManager:

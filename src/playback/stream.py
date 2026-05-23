@@ -22,6 +22,9 @@ from src.playback.window import PlaybackPlan, plan_playback_window
 
 logger = logging.getLogger(__name__)
 
+# Paquetes en cola en vivo más viejos que esto se descartan al enlazar búfer → vivo.
+_LIVE_STALE_MAX_SEC = 2.0
+
 
 class PlaybackStreamError(Exception):
     """Error recuperable en playback RTSP."""
@@ -76,6 +79,13 @@ async def stream_playback_h264(
             yield chunk
 
     if plan.needs_live_tail:
+        dropped = await consumer.purge_live_queue_older_than(time.monotonic() - 0.5)
+        if dropped:
+            logger.info(
+                "Playback %s: descartados %d paquetes vivos obsoletos antes del directo",
+                camera.camera_id,
+                dropped,
+            )
         logger.info(
             "Playback %s: cola en vivo %.1fs hasta %s",
             camera.camera_id,
@@ -140,6 +150,9 @@ async def _emit_live_until(
         packet = await consumer.get_live_packet(timeout=0.5)
         if packet is None:
             await asyncio.sleep(0.01)
+            continue
+        age = time.monotonic() - packet.captured_at
+        if age > _LIVE_STALE_MAX_SEC:
             continue
         yield to_annex_b(packet.data, codec)
         await asyncio.sleep(frame_interval * 0.85)
