@@ -1294,12 +1294,19 @@ def _gateway_diagnosis(status: dict, settings: AppSettings) -> list[str]:
 @router.post("/gateway/reload")
 async def gateway_reload(
     gateway_manager: Annotated[GatewayManager, Depends(get_gateway_manager)],
+    repo: Annotated[CameraRepository, Depends(get_repository)],
     settings: Annotated[AppSettings, Depends(get_app_settings)],
 ) -> dict:
     if not settings.rtsp_gateway_enabled:
         raise HTTPException(status_code=400, detail="RTSP_GATEWAY_ENABLED=false")
     await gateway_manager.sync_from_repository()
-    return gateway_manager.get_status()
+    cameras = await repo.list_all()
+    status = gateway_manager.get_status(cameras)
+    status["cameras_with_gateway"] = sum(
+        1 for c in cameras if c.enabled and c.output.gateway.enabled
+    )
+    status["diagnosis"] = _gateway_diagnosis(status, settings)
+    return status
 
 
 @router.post("/cameras/{camera_id}/relay/start")
