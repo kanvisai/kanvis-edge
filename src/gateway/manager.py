@@ -36,23 +36,35 @@ class GatewayManager:
         return self._settings.rtsp_gateway_enabled
 
     def _resolve_binary(self) -> str | None:
+        """Ruta al binario MediaMTX (PATH, INSTALL_ROOT/bin o ruta absoluta)."""
         custom = self._settings.mediamtx_binary.strip()
+        candidates: list[Path] = []
         if custom:
-            path = Path(custom)
-            if path.is_file() and path.stat().st_mode & 0o111:
-                return str(path)
-            found = shutil.which(custom)
+            candidates.append(Path(custom))
+            if "/" not in custom:
+                candidates.append(self._settings.install_root / "bin" / custom)
+        candidates.append(self._settings.install_root / "bin" / "mediamtx")
+
+        for path in candidates:
+            try:
+                resolved = path.expanduser().resolve()
+            except OSError:
+                continue
+            if resolved.is_file() and resolved.stat().st_mode & 0o111:
+                return str(resolved)
+
+        for name in (custom, "mediamtx"):
+            if not name:
+                continue
+            found = shutil.which(name)
             if found:
                 return found
-            self._last_error = f"MediaMTX no encontrado: {custom}"
-            return None
-        found = shutil.which("mediamtx")
-        if found:
-            return found
+
+        label = custom or "mediamtx"
         bundled = self._settings.install_root / "bin" / "mediamtx"
-        if bundled.is_file():
-            return str(bundled)
-        self._last_error = "MediaMTX no instalado (apt/install.sh o MEDIAMTX_BINARY)"
+        self._last_error = (
+            f"MediaMTX no encontrado: {label!r} (probado PATH y {bundled})"
+        )
         return None
 
     @property
