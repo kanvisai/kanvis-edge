@@ -93,7 +93,8 @@ async def health(request: Request) -> dict:
 
     return {
         "status": "ok",
-        "ui_version": "2025-05-broadcast-conn-hints",
+        "ui_version": "2026-05-rtsp-gateway-v2",
+        "edge_build": "rtsp-gateway-playback-v2",
         "public_ip": public_ip,
         "features": {
             "rtsp_probe_tools": True,
@@ -1262,7 +1263,32 @@ async def gateway_status(
         + " → IP_EDGE:" + str(settings.rtsp_gateway_port)
         + "/TCP; ver docs/RTSP_GATEWAY.md"
     )
+    status["cameras_with_gateway"] = sum(
+        1 for c in cameras if c.enabled and c.output.gateway.enabled
+    )
+    status["diagnosis"] = _gateway_diagnosis(status, settings)
     return status
+
+
+def _gateway_diagnosis(status: dict, settings: AppSettings) -> list[str]:
+    hints: list[str] = []
+    if not settings.rtsp_gateway_enabled:
+        hints.append("RTSP_GATEWAY_ENABLED=false en /etc/kanvis-edge/env")
+        return hints
+    if not status.get("mediamtx_binary"):
+        hints.append("MediaMTX no encontrado: instala mediamtx o MEDIAMTX_BINARY")
+    if status.get("cameras_with_gateway", 0) == 0:
+        hints.append(
+            "Ninguna cámara con output.gateway.enabled=true; guarda la cámara con "
+            "broadcast (o edita cameras.json) y POST /api/v1/gateway/reload"
+        )
+    if status.get("last_error"):
+        hints.append(str(status["last_error"]))
+    if not status.get("running") and not hints:
+        hints.append(
+            f"Puerto {settings.rtsp_gateway_port} sin listener; revisa journalctl -u kanvis-edge"
+        )
+    return hints
 
 
 @router.post("/gateway/reload")

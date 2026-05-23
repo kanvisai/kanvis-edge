@@ -874,7 +874,7 @@ function setChannelBusy(card, busy, message = "Conectando…") {
   }
 }
 
-async function loadAccessInfo(cameraId, card, device, cam) {
+async function loadAccessInfo(cameraId, card, device, cam, opts = {}) {
   const el = card?.querySelector(".conn-hints");
   if (!el) return;
   const scrollY = window.scrollY;
@@ -899,6 +899,16 @@ async function loadAccessInfo(cameraId, card, device, cam) {
       });
     } else {
       info = await api(`/api/v1/cameras/${cameraId}/access-info`);
+    }
+    if (opts.gwStatus && info.gateway) {
+      info.gateway.running = !!opts.gwStatus.running;
+      info.gateway.last_error = opts.gwStatus.last_error || info.gateway.last_error;
+      if (opts.gwStatus.diagnosis?.length) {
+        info.gateway.hints = [
+          ...opts.gwStatus.diagnosis,
+          ...(info.gateway.hints || []),
+        ];
+      }
     }
     renderConnectionHints(el, info, mode);
     requestAnimationFrame(() => window.scrollTo(0, scrollY));
@@ -1313,6 +1323,14 @@ async function refreshChannelStatus(cameraId, card, device, cam, opts = {}) {
   const playbackBtn = card.querySelector("[data-playback-test]");
   const bufHint = card.querySelector(".buf-hint");
   try {
+    let gwStatus = null;
+    if (edgeConfig.rtsp_gateway_enabled) {
+      try {
+        gwStatus = await api("/api/v1/gateway/status");
+      } catch (_) {
+        /* ignore */
+      }
+    }
     const st = await api(`/api/v1/cameras/${cameraId}/status`);
     const ing = hasWorkingIngest(st);
     const relay = st.relay?.running;
@@ -1361,7 +1379,9 @@ async function refreshChannelStatus(cameraId, card, device, cam, opts = {}) {
       playbackBtn.disabled = !ing || span < PLAYBACK_OFFSET_SEC * 0.85;
     }
     card.dataset.broadcastOn = bcOn ? "1" : "0";
-    if (!opts.light && device && cam) loadAccessInfo(cameraId, card, device, cam);
+    if (!opts.light && device && cam) {
+      await loadAccessInfo(cameraId, card, device, cam, { gwStatus });
+    }
     if (!bcOn) stopChannelStatusPoll(cameraId);
   } catch {
     badge.innerHTML = '<span class="badge muted">Sin guardar / inactiva</span>';
@@ -1473,6 +1493,27 @@ async function toggleBroadcast(device, cam, card) {
         throw new Error(err);
       }
 
+      if (edgeConfig.rtsp_gateway_enabled && mode === "rtsp") {
+        try {
+          await api("/api/v1/gateway/reload", { method: "POST" });
+        } catch (gwErr) {
+          console.warn("gateway/reload", gwErr);
+        }
+        if (startRes.gateway_last_error) {
+          setActionMsg(
+            bcMsg,
+            `Broadcast OK. MediaMTX: ${startRes.gateway_last_error}`,
+            "err"
+          );
+        } else if (startRes.gateway_running === false) {
+          setActionMsg(
+            bcMsg,
+            "Broadcast OK. MediaMTX aún no escucha — revisa «RTSP Gateway» abajo o instala mediamtx.",
+            "err"
+          );
+        }
+      }
+
       if (mode === "webrtc") {
         setChannelBusy(card, true, "Conectando WebRTC…");
         setActionMsg(bcMsg, "Conectando WebRTC…");
@@ -1494,11 +1535,15 @@ async function toggleBroadcast(device, cam, card) {
         });
         video?.classList.remove("hidden");
       }
-      setActionMsg(
-        bcMsg,
-        `Broadcast activado (${mode}). Ingesta OK — búfer rellenándose (hasta 60 s).`,
-        "ok"
-      );
+      if (
+        !(edgeConfig.rtsp_gateway_enabled && mode === "rtsp" && startRes.gateway_last_error)
+      ) {
+        setActionMsg(
+          bcMsg,
+          `Broadcast activado (${mode}). Ingesta OK — búfer rellenándose (hasta 60 s).`,
+          "ok"
+        );
+      }
       card.dataset.broadcastOn = "1";
       startChannelStatusPoll(cameraId, card, device, cam);
     } else {
