@@ -30,6 +30,45 @@ class PlaybackStreamError(Exception):
     """Error recuperable en playback RTSP."""
 
 
+def _extradata_to_annex_b(extradata: bytes, codec: str) -> bytes:
+    """Convierte extradata (avcC/hvcC) a NALUs SPS/PPS Annex-B para iniciar stream."""
+    from src.ingestion.packet_decode import is_annex_b, avcc_to_annex_b
+
+    if is_annex_b(extradata):
+        return extradata
+    if codec in ("h264", "avc", "avc1"):
+        return _parse_avcc_extradata(extradata)
+    return avcc_to_annex_b(extradata)
+
+
+def _parse_avcc_extradata(data: bytes) -> bytes:
+    """Extrae SPS/PPS de avcC extradata y devuelve Annex-B."""
+    out = bytearray()
+    try:
+        if len(data) < 7 or data[0] != 0x01:
+            return data
+        i = 5
+        num_sps = data[i] & 0x1F
+        i += 1
+        for _ in range(num_sps):
+            sps_len = int.from_bytes(data[i : i + 2], "big")
+            i += 2
+            out.extend(b"\x00\x00\x00\x01")
+            out.extend(data[i : i + sps_len])
+            i += sps_len
+        num_pps = data[i]
+        i += 1
+        for _ in range(num_pps):
+            pps_len = int.from_bytes(data[i : i + 2], "big")
+            i += 2
+            out.extend(b"\x00\x00\x00\x01")
+            out.extend(data[i : i + pps_len])
+            i += pps_len
+    except (IndexError, ValueError):
+        return data
+    return bytes(out) if out else data
+
+
 async def stream_playback_h264(
     *,
     camera: CameraRecord,
@@ -55,6 +94,9 @@ async def stream_playback_h264(
     fps = max(1, camera.source.fps)
     frame_interval = 1.0 / fps
 
+    extradata = consumer.video_extradata
+    sps_pps_emitted = False
+
     if plan.needs_buffer:
         packets = trim_packets_from_keyframe(
             buffer.snapshot_between_ages(
@@ -75,10 +117,16 @@ async def stream_playback_h264(
             plan.buffer_end_sec_ago,
             len(packets),
         )
+        if extradata and not sps_pps_emitted:
+            yield _extradata_to_annex_b(extradata, codec)
+            sps_pps_emitted = True
         async for chunk in _emit_packets_realtime(packets, codec, frame_interval):
             yield chunk
 
     if plan.needs_live_tail:
+        if extradata and not sps_pps_emitted:
+            yield _extradata_to_annex_b(extradata, codec)
+            sps_pps_emitted = True
         dropped = await consumer.purge_live_queue_older_than(time.monotonic() - 0.5)
         if dropped:
             logger.info(
