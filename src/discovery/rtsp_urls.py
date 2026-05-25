@@ -118,14 +118,21 @@ def build_camera_rtsp_url(
     return source.rtsp_url_legacy()
 
 
+def _prefixed_path(camera_id: str, path: str) -> str:
+    """Prefija el path con camera_id para evitar colisiones entre cámaras."""
+    path = path.lstrip("/")
+    return f"{camera_id}/{path}" if path else camera_id
+
+
 def gateway_stream_path(camera: CameraRecord, settings: AppSettings) -> str:
-    """Ruta RTSP de vivo en el edge (sin host ni query)."""
+    """Ruta RTSP de vivo en el edge (con prefijo camera_id para unicidad)."""
     url = build_camera_rtsp_url(camera, mode="stream", target="edge", settings=settings)
-    return rtsp_path_from_url(url)
+    raw_path = rtsp_path_from_url(url)
+    return _prefixed_path(camera.camera_id, raw_path)
 
 
 def gateway_playback_path(camera: CameraRecord, settings: AppSettings) -> str:
-    """Ruta RTSP de playback en el edge (sin host ni query)."""
+    """Ruta RTSP de playback en el edge (con prefijo camera_id para unicidad)."""
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
@@ -138,11 +145,12 @@ def gateway_playback_path(camera: CameraRecord, settings: AppSettings) -> str:
         endtime=now,
     )
     path = urlparse(url).path or "/"
-    return path.lstrip("/")
+    raw_path = path.lstrip("/")
+    return _prefixed_path(camera.camera_id, raw_path)
 
 
 def default_gateway_path(camera: CameraRecord, settings: AppSettings | None = None) -> str:
-    """Ruta pública RTSP en el edge (misma estructura que el fabricante si hay marca)."""
+    """Ruta pública RTSP en el edge (prefijada con camera_id para unicidad)."""
     gw_path = camera.output.gateway.path.strip("/")
     if gw_path:
         return gw_path
@@ -152,7 +160,7 @@ def default_gateway_path(camera: CameraRecord, settings: AppSettings | None = No
             url = build_camera_rtsp_url(camera, mode="stream", target="edge", settings=settings)
             path = rtsp_path_from_url(url)
             if path:
-                return path
+                return _prefixed_path(camera.camera_id, path)
         except (FileNotFoundError, ValueError):
             pass
     return camera.camera_id

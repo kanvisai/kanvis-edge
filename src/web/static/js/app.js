@@ -981,7 +981,7 @@ function renderChannelPanel(device, chState, root) {
       <strong>Canal ${escapeHtml(ch)}</strong>
       <span class="ch-status badge muted">—</span>
     </header>
-    <p class="section-label">Broadcast (búfer 60 s)</p>
+    <p class="section-label">Broadcast (búfer ${edgeConfig.buffer_duration_seconds || 60} s)</p>
     <div class="mode-row">
       <label class="mode-opt"><input type="radio" name="bc-mode-${cameraId}" value="rtsp" ${mode === "rtsp" ? "checked" : ""}/> RTSP rebroadcast</label>
       <label class="mode-opt"><input type="radio" name="bc-mode-${cameraId}" value="webrtc" ${mode === "webrtc" ? "checked" : ""}/> WebRTC</label>
@@ -1540,7 +1540,7 @@ async function toggleBroadcast(device, cam, card) {
       ) {
         setActionMsg(
           bcMsg,
-          `Broadcast activado (${mode}). Ingesta OK — búfer rellenándose (hasta 60 s).`,
+          `Broadcast activado (${mode}). Ingesta OK — búfer rellenándose (hasta ${edgeConfig.buffer_duration_seconds || 60} s).`,
           "ok"
         );
       }

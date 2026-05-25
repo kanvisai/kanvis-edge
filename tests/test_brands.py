@@ -143,4 +143,4 @@ def test_camera_device_and_edge_urls() -> None:
 def test_default_gateway_path_annke() -> None:
     cam = _annke_camera()
     settings = AppSettings()
-    assert default_gateway_path(cam, settings) == "Streaming/channels/101"
+    assert default_gateway_path(cam, settings) == "cam-annke/Streaming/channels/101"

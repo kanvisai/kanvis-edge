@@ -198,13 +198,13 @@ def build_gateway_access_urls(
     URLs RTSP gateway (vivo + playback) para LAN y WAN.
 
     El playback incluye starttime/endtime de ejemplo; el cliente debe recalcularlos.
+    Paths prefijados con camera_id para unicidad entre múltiples cámaras.
     """
     from datetime import datetime, timedelta, timezone
-    from urllib.parse import parse_qs, urlparse
+    from urllib.parse import quote, urlencode, urlunparse
 
     from src.brands import default_brands_dir, load_brand_profile
     from src.discovery.rtsp_urls import (
-        build_camera_rtsp_url,
         gateway_playback_path,
         gateway_stream_path,
     )
@@ -219,34 +219,20 @@ def build_gateway_access_urls(
         return {"error": "Sin IP LAN del edge"}
 
     try:
-        stream_tpl = build_camera_rtsp_url(
-            camera, mode="stream", target="edge", settings=settings
-        )
-        playback_tpl = build_camera_rtsp_url(
-            camera,
-            mode="playback",
-            target="edge",
-            settings=settings,
-            starttime=start,
-            endtime=end,
-        )
         stream_path = gateway_stream_path(camera, settings)
         playback_path = gateway_playback_path(camera, settings)
     except (FileNotFoundError, ValueError, KeyError) as exc:
         return {"error": str(exc)}
 
-    stream_lan = replace_rtsp_host_port(stream_tpl, lan, lan_port)
-    playback_lan = replace_rtsp_host_port(playback_tpl, lan, lan_port)
-    pub = (public_host or "").strip()
-    stream_wan = playback_wan = ""
-    if pub:
-        stream_wan = replace_rtsp_host_port(stream_tpl, pub, wan_port)
-        playback_wan = replace_rtsp_host_port(playback_tpl, pub, wan_port)
+    gw = camera.output.gateway
+    user = gw.username or camera.source.username
+    pwd = gw.password.get_secret_value() or camera.source.password.get_secret_value()
+    auth = f"{quote(user, safe='')}:{quote(pwd, safe='')}@" if user else ""
 
-    mpv_tpl = 'mpv --rtsp-transport=tcp --no-audio "{url}"'
-    pb_qs = parse_qs(urlparse(playback_lan).query)
-    ex_start = (pb_qs.get("starttime") or [""])[0]
-    ex_end = (pb_qs.get("endtime") or [""])[0]
+    def _build_url(host: str, port: int, path: str, query: str = "") -> str:
+        netloc = f"{auth}{host}:{port}"
+        return urlunparse(("rtsp", netloc, f"/{path}", "", query, ""))
+
     brand_slug = (camera.source.brand or "").strip().lower()
     requires_utc = True
     if brand_slug:
@@ -255,6 +241,23 @@ def build_gateway_access_urls(
             requires_utc = profile.protocols.rtsp.requires_utc
         except FileNotFoundError:
             pass
+
+    if requires_utc:
+        starttime_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        endtime_str = end.strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+        starttime_str = start.strftime("%Y-%m-%dT%H:%M:%S")
+        endtime_str = end.strftime("%Y-%m-%dT%H:%M:%S")
+
+    pb_query = urlencode({"starttime": starttime_str, "endtime": endtime_str})
+
+    stream_lan = _build_url(lan, lan_port, stream_path)
+    playback_lan = _build_url(lan, lan_port, playback_path, pb_query)
+    pub = (public_host or "").strip()
+    stream_wan = _build_url(pub, wan_port, stream_path) if pub else ""
+    playback_wan = _build_url(pub, wan_port, playback_path, pb_query) if pub else ""
+
+    mpv_tpl = 'mpv --rtsp-transport=tcp --no-audio "{url}"'
     time_kind = "UTC" if requires_utc else "hora local del edge"
     time_note = (
         f"Ventana de ejemplo (−6 s / +30 s, {time_kind}). "
@@ -276,8 +279,8 @@ def build_gateway_access_urls(
             "url_wan": playback_wan or None,
             "mpv_lan": mpv_tpl.format(url=playback_lan),
             "mpv_wan": mpv_tpl.format(url=playback_wan) if playback_wan else None,
-            "example_starttime": ex_start,
-            "example_endtime": ex_end,
+            "example_starttime": starttime_str,
+            "example_endtime": endtime_str,
             "note": (
                 f"{time_note} El edge sirve el tramo reciente desde el búfer RAM."
             ),
@@ -291,47 +294,25 @@ def build_gateway_client_url(
     *,
     public_host: str | None = None,
 ) -> str:
-    """URL RTSP para clientes externos (misma estructura que el fabricante si hay marca)."""
-    from src.discovery.rtsp_urls import build_camera_rtsp_url
-
-    if (camera.source.brand or "").strip():
-        host = public_host
-        if host:
-            port = (
-                settings.rtsp_gateway_port
-                if settings.rtsp_gateway_enabled
-                else settings.edge_rtsp_port
-            )
-            gw = camera.output.gateway
-            user = gw.username or camera.source.username
-            pwd = gw.password.get_secret_value() or camera.source.password.get_secret_value()
-            from src.brands import build_rtsp_template_values, load_brand_profile, render_rtsp_url
-
-            from src.brands.registry import default_brands_dir
-
-            profile = load_brand_profile(
-                camera.source.brand,
-                default_brands_dir(settings.config_dir),
-            )
-            values = build_rtsp_template_values(
-                username=user,
-                password=pwd,
-                host=host,
-                port=port,
-                channel=camera.source.channel or "101",
-            )
-            return render_rtsp_url(profile, mode="stream", values=values)
-        return build_camera_rtsp_url(
-            camera, mode="stream", target="edge", settings=settings
-        )
+    """URL RTSP para clientes externos (prefijada con camera_id para unicidad)."""
+    from src.discovery.rtsp_urls import gateway_stream_path
 
     gw = camera.output.gateway
     host = public_host or settings.rtsp_gateway_listen_host
     if host in ("0.0.0.0", "::", ""):
         host = "127.0.0.1"
     port = settings.rtsp_gateway_port
-    path_name = _gateway_path(camera, settings)
-    user = gw.username
-    pwd = gw.password.get_secret_value()
+    user = gw.username or camera.source.username
+    pwd = gw.password.get_secret_value() or camera.source.password.get_secret_value()
     auth = f"{user}:{pwd}@" if user else (f":{pwd}@" if pwd else "")
+
+    brand = (camera.source.brand or "").strip()
+    if brand:
+        try:
+            path_name = gateway_stream_path(camera, settings)
+        except (FileNotFoundError, ValueError):
+            path_name = _gateway_path(camera, settings)
+    else:
+        path_name = _gateway_path(camera, settings)
+
     return f"rtsp://{auth}{host}:{port}/{path_name}"

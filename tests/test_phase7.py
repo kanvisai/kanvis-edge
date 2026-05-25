@@ -106,10 +106,10 @@ def test_generate_mediamtx_config_brand_playback_path() -> None:
         buffer=CameraBufferSettings(),
     )
     cfg = generate_mediamtx_config([cam], settings)
-    assert "Streaming/channels/101" in cfg["paths"]
-    assert "Streaming/tracks/101" in cfg["paths"]
-    assert "runOnDemand" in cfg["paths"]["Streaming/tracks/101"]
-    assert cfg["paths"]["Streaming/tracks/101"]["runOnDemandRestart"] is False
+    assert "cam-annke/Streaming/channels/101" in cfg["paths"]
+    assert "cam-annke/Streaming/tracks/101" in cfg["paths"]
+    assert "runOnDemand" in cfg["paths"]["cam-annke/Streaming/tracks/101"]
+    assert cfg["paths"]["cam-annke/Streaming/tracks/101"]["runOnDemandRestart"] is False
 
 
 def test_render_yaml_run_on_demand_single_line() -> None:
@@ -152,7 +152,7 @@ def test_render_yaml_contains_path() -> None:
 
 def test_build_gateway_client_url() -> None:
     url = build_gateway_client_url(_camera(), AppSettings(RTSP_GATEWAY_PORT=8554))
-    assert url == "rtsp://127.0.0.1:8554/cam-01"
+    assert url == "rtsp://admin:secret@127.0.0.1:8554/cam-01"
 
 
 def test_gateway_config_signature_changes() -> None:
@@ -200,7 +200,7 @@ def test_build_gateway_access_urls_annke() -> None:
         cam, settings, lan_host="192.168.1.100", public_host="203.0.113.1"
     )
     assert "error" not in urls
-    assert "Streaming/channels/101" in urls["stream"]["url_lan"]
-    assert "Streaming/tracks/101" in urls["playback"]["url_lan"]
+    assert "cam-annke/Streaming/channels/101" in urls["stream"]["url_lan"]
+    assert "cam-annke/Streaming/tracks/101" in urls["playback"]["url_lan"]
     assert "starttime=" in urls["playback"]["url_lan"]
     assert "203.0.113.1:55422" in urls["stream"]["url_wan"]
