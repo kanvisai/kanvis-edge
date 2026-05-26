@@ -37,10 +37,10 @@ def build_playback_run_on_demand(settings: AppSettings) -> str:
     """FFmpeg publica en MediaMTX leyendo H.264 desde el API interno (búfer + vivo)."""
     api_port = settings.edge_api_port
     ff = settings.ffmpeg_path
-    # Comillas: sh no parte el & del -i. &$MTX_QUERY (no mtx_query=...) evita que el &
-    # de starttime/endtime rompa la query HTTP de FFmpeg.
     return (
-        f"{ff} -loglevel warning -nostdin -probesize 8192 -analyzeduration 0 "
+        f"{ff} -loglevel warning -nostdin "
+        f"-fflags +nobuffer+fastseek -flags low_delay "
+        f"-probesize 4096 -analyzeduration 0 "
         f"-f h264 "
         f'-i "http://127.0.0.1:{api_port}/api/v1/internal/rtsp-playback'
         f'?mtx_path=$MTX_PATH&$MTX_QUERY" '

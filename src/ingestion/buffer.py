@@ -96,6 +96,57 @@ class PacketCircularBuffer:
         with self._lock:
             return [p for p in self._deque if cutoff_old <= p.captured_at <= cutoff_new]
 
+    def snapshot_from_preceding_keyframe(
+        self,
+        start_sec_ago: float,
+        end_sec_ago: float,
+    ) -> list[RawPacket]:
+        """
+        Devuelve paquetes empezando desde el keyframe más cercano al inicio
+        del rango solicitado, buscando primero hacia atrás y si no hay,
+        hacia adelante dentro del rango.
+
+        Prioridad:
+          1. Último keyframe AT o ANTES de start_sec_ago (extiende hacia atrás)
+          2. Primer keyframe DESPUÉS de start_sec_ago (dentro del rango)
+          3. Inicio del rango sin keyframe (último recurso, con warning externo)
+        """
+        if start_sec_ago < end_sec_ago:
+            start_sec_ago, end_sec_ago = end_sec_ago, start_sec_ago
+        now = time.monotonic()
+        cutoff_old = now - max(0.0, start_sec_ago)
+        cutoff_new = now - max(0.0, end_sec_ago)
+        with self._lock:
+            kf_before: int | None = None
+            kf_in_range: int | None = None
+            first_in_range: int | None = None
+
+            for i, p in enumerate(self._deque):
+                if p.captured_at > cutoff_new:
+                    break
+                if p.captured_at <= cutoff_old:
+                    if p.is_keyframe:
+                        kf_before = i
+                else:
+                    if first_in_range is None:
+                        first_in_range = i
+                    if kf_in_range is None and p.is_keyframe:
+                        kf_in_range = i
+
+            if kf_before is not None:
+                start_idx = kf_before
+            elif kf_in_range is not None:
+                start_idx = kf_in_range
+            elif first_in_range is not None:
+                start_idx = first_in_range
+            else:
+                return []
+
+            return [
+                p for p in list(self._deque)[start_idx:]
+                if p.captured_at <= cutoff_new
+            ]
+
     def drain_atomic(self) -> list[RawPacket]:
         """Vacía todo el búfer (uso legacy; preferir snapshot_last_seconds)."""
         with self._lock:

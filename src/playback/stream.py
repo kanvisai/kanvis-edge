@@ -15,15 +15,20 @@ from src.config_loader import AppSettings
 from src.discovery.models import CameraRecord
 from src.ingestion.buffer import PacketCircularBuffer, RawPacket
 from src.ingestion.consumer import StreamConsumer
-from src.ingestion.packet_decode import to_annex_b, trim_packets_from_keyframe
+from src.ingestion.packet_decode import (
+    h264_avcc_extradata_from_keyframe,
+    iter_annex_b_nals,
+    to_annex_b,
+)
 from src.brands import load_brand_profile
 from src.brands.registry import default_brands_dir
 from src.playback.window import PlaybackPlan, plan_playback_window
 
 logger = logging.getLogger(__name__)
 
-# Paquetes en cola en vivo más viejos que esto se descartan al enlazar búfer → vivo.
 _LIVE_STALE_MAX_SEC = 2.0
+
+_ANNEX_B_START = b"\x00\x00\x00\x01"
 
 
 class PlaybackStreamError(Exception):
@@ -53,7 +58,7 @@ def _parse_avcc_extradata(data: bytes) -> bytes:
         for _ in range(num_sps):
             sps_len = int.from_bytes(data[i : i + 2], "big")
             i += 2
-            out.extend(b"\x00\x00\x00\x01")
+            out.extend(_ANNEX_B_START)
             out.extend(data[i : i + sps_len])
             i += sps_len
         num_pps = data[i]
@@ -61,12 +66,64 @@ def _parse_avcc_extradata(data: bytes) -> bytes:
         for _ in range(num_pps):
             pps_len = int.from_bytes(data[i : i + 2], "big")
             i += 2
-            out.extend(b"\x00\x00\x00\x01")
+            out.extend(_ANNEX_B_START)
             out.extend(data[i : i + pps_len])
             i += pps_len
     except (IndexError, ValueError):
         return data
     return bytes(out) if out else data
+
+
+def _extract_sps_pps_from_keyframe(keyframe_data: bytes, codec: str) -> bytes | None:
+    """Extrae SPS/PPS directamente del primer keyframe Annex-B como fallback."""
+    annex = to_annex_b(keyframe_data, codec)
+    parts = bytearray()
+    for nal in iter_annex_b_nals(annex):
+        if not nal:
+            continue
+        if codec in ("h264", "avc", "avc1"):
+            ntype = nal[0] & 0x1F
+            if ntype in (7, 8):  # SPS=7, PPS=8
+                parts.extend(_ANNEX_B_START)
+                parts.extend(nal)
+        else:
+            ntype = (nal[0] >> 1) & 0x3F
+            if ntype in (32, 33, 34):  # VPS=32, SPS=33, PPS=34 (HEVC)
+                parts.extend(_ANNEX_B_START)
+                parts.extend(nal)
+    return bytes(parts) if parts else None
+
+
+def _ensure_sps_pps(
+    extradata: bytes | None,
+    packets: list[RawPacket],
+    codec: str,
+) -> bytes | None:
+    """
+    Obtiene SPS/PPS Annex-B garantizado, con cascada de fuentes:
+    1. extradata del codec context (consumer)
+    2. NALs SPS/PPS dentro del primer keyframe del buffer
+    3. Reconstrucción avcC desde el keyframe
+    """
+    if extradata:
+        result = _extradata_to_annex_b(extradata, codec)
+        if result and len(result) > 8:
+            return result
+
+    for pkt in packets:
+        if pkt.is_keyframe:
+            inline = _extract_sps_pps_from_keyframe(pkt.data, codec)
+            if inline and len(inline) > 8:
+                return inline
+            if codec in ("h264", "avc", "avc1"):
+                avcc = h264_avcc_extradata_from_keyframe(pkt.data)
+                if avcc:
+                    result = _extradata_to_annex_b(avcc, codec)
+                    if result and len(result) > 8:
+                        return result
+            break
+
+    return None
 
 
 async def stream_playback_h264(
@@ -83,6 +140,9 @@ async def stream_playback_h264(
 
     Orden: tramo en búfer RAM, cola en vivo hasta endtime, playback de cámara
     para histórico anterior al búfer.
+
+    El stream siempre comienza con SPS/PPS + IDR para garantizar
+    que el decoder puede inicializarse desde el primer frame.
     """
     depth = camera.effective_buffer_duration(settings.buffer_duration_seconds)
     plan = plan_playback_window(
@@ -98,35 +158,44 @@ async def stream_playback_h264(
     sps_pps_emitted = False
 
     if plan.needs_buffer:
-        packets = trim_packets_from_keyframe(
-            buffer.snapshot_between_ages(
-                plan.buffer_start_sec_ago,
-                plan.buffer_end_sec_ago,
-            )
+        packets = buffer.snapshot_from_preceding_keyframe(
+            plan.buffer_start_sec_ago,
+            plan.buffer_end_sec_ago,
         )
         if not packets:
             raise PlaybackStreamError(
                 f"Búfer insuficiente para {plan.buffer_start_sec_ago:.1f}s; "
                 "activa ingesta y espera a que se llene"
             )
+        if not packets[0].is_keyframe:
+            logger.warning(
+                "Playback %s: sin keyframe previo en el búfer, "
+                "posibles artefactos al inicio",
+                camera.camera_id,
+            )
         logger.info(
-            "Playback %s: búfer %.1fs (%.1f→%.1fs atrás), %d paquetes",
+            "Playback %s: búfer %.1fs (%.1f→%.1fs atrás), %d paquetes "
+            "(inicio en keyframe=%s)",
             camera.camera_id,
             plan.buffer_start_sec_ago - plan.buffer_end_sec_ago,
             plan.buffer_start_sec_ago,
             plan.buffer_end_sec_ago,
             len(packets),
+            packets[0].is_keyframe if packets else False,
         )
-        if extradata and not sps_pps_emitted:
-            yield _extradata_to_annex_b(extradata, codec)
+        sps_pps = _ensure_sps_pps(extradata, packets, codec)
+        if sps_pps:
+            yield sps_pps
             sps_pps_emitted = True
         async for chunk in _emit_packets_realtime(packets, codec, frame_interval):
             yield chunk
 
     if plan.needs_live_tail:
-        if extradata and not sps_pps_emitted:
-            yield _extradata_to_annex_b(extradata, codec)
-            sps_pps_emitted = True
+        if not sps_pps_emitted:
+            sps_pps = _ensure_sps_pps(extradata, [], codec)
+            if sps_pps:
+                yield sps_pps
+                sps_pps_emitted = True
         dropped = await consumer.purge_live_queue_older_than(time.monotonic() - 0.5)
         if dropped:
             logger.info(
@@ -141,7 +210,9 @@ async def stream_playback_h264(
             plan.end.isoformat(),
         )
         deadline = time.monotonic() + plan.live_tail_sec
-        async for chunk in _emit_live_until(consumer, codec, frame_interval, deadline):
+        async for chunk in _emit_live_until(
+            consumer, codec, frame_interval, deadline, not sps_pps_emitted
+        ):
             yield chunk
 
     device_playback = True
@@ -182,10 +253,14 @@ async def _emit_packets_realtime(
     codec: str,
     frame_interval: float,
 ) -> AsyncIterator[bytes]:
+    """Emite paquetes usando tiempos de captura reales para pacing correcto."""
     for i, packet in enumerate(packets):
         yield to_annex_b(packet.data, codec)
         if i + 1 < len(packets):
-            await asyncio.sleep(frame_interval)
+            next_pkt = packets[i + 1]
+            delta = next_pkt.captured_at - packet.captured_at
+            sleep_time = max(0.001, min(delta, frame_interval * 3))
+            await asyncio.sleep(sleep_time)
 
 
 async def _emit_live_until(
@@ -193,7 +268,11 @@ async def _emit_live_until(
     codec: str,
     frame_interval: float,
     deadline_mono: float,
+    wait_for_keyframe: bool = False,
 ) -> AsyncIterator[bytes]:
+    """Emite paquetes en vivo hasta el deadline. Si wait_for_keyframe=True,
+    descarta P-frames hasta recibir el primer keyframe."""
+    waiting_kf = wait_for_keyframe
     while time.monotonic() < deadline_mono:
         packet = await consumer.get_live_packet(timeout=0.5)
         if packet is None:
@@ -202,6 +281,10 @@ async def _emit_live_until(
         age = time.monotonic() - packet.captured_at
         if age > _LIVE_STALE_MAX_SEC:
             continue
+        if waiting_kf:
+            if not packet.is_keyframe:
+                continue
+            waiting_kf = False
         yield to_annex_b(packet.data, codec)
         await asyncio.sleep(frame_interval * 0.85)
 

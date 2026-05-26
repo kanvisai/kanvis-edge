@@ -62,6 +62,90 @@ def test_snapshot_between_ages() -> None:
     assert window[-1].data <= bytes([7])
 
 
+def test_snapshot_preceding_kf_keyframe_before_range() -> None:
+    """Pido 6s, keyframe a 9s atrás → coge desde el keyframe a 9s."""
+    buf = PacketCircularBuffer(max_duration_seconds=30.0)
+    mono = time.monotonic()
+    # KF at -9s (i=0), P-frames in between, KF at -1s (i=8)
+    for i in range(10):
+        buf.append(
+            RawPacket(
+                data=bytes([i]),
+                pts=i,
+                dts=i,
+                is_keyframe=(i == 0 or i == 8),
+                captured_at=mono - 9 + i,
+            )
+        )
+    # Rango: 6s→2s atrás. El KF previo es i=0 (a 9s atrás).
+    window = buf.snapshot_from_preceding_keyframe(6.0, 2.0)
+    assert window[0].is_keyframe
+    assert window[0].data == bytes([0])
+    assert len(window) >= 7  # i=0..i=7
+
+
+def test_snapshot_preceding_kf_keyframe_inside_range() -> None:
+    """Pido 6s, no hay KF antes del rango, KF a 3s atrás → coge desde 3s."""
+    buf = PacketCircularBuffer(max_duration_seconds=30.0)
+    mono = time.monotonic()
+    # Solo P-frames viejos + KF a 3s atrás + P-frames recientes
+    for i in range(10):
+        buf.append(
+            RawPacket(
+                data=bytes([i]),
+                pts=i,
+                dts=i,
+                is_keyframe=(i == 6),  # 6 → captured_at = mono-3
+                captured_at=mono - 9 + i,
+            )
+        )
+    # Rango: 6s→0s. No hay KF antes de 6s. El primer KF en rango es i=6 (3s).
+    window = buf.snapshot_from_preceding_keyframe(6.0, 0.0)
+    assert window[0].is_keyframe
+    assert window[0].data == bytes([6])
+    assert len(window) >= 3  # i=6, i=7, i=8, i=9
+
+
+def test_snapshot_preceding_kf_prefers_before_over_inside() -> None:
+    """Si hay KF antes Y dentro del rango, prefiere el de antes."""
+    buf = PacketCircularBuffer(max_duration_seconds=30.0)
+    mono = time.monotonic()
+    # KF at -8s (i=1), KF at -4s (i=5)
+    for i in range(10):
+        buf.append(
+            RawPacket(
+                data=bytes([i]),
+                pts=i,
+                dts=i,
+                is_keyframe=(i == 1 or i == 5),
+                captured_at=mono - 9 + i,
+            )
+        )
+    # Rango: 6s→1s. KF antes = i=1 (8s atrás). KF dentro = i=5 (4s atrás).
+    window = buf.snapshot_from_preceding_keyframe(6.0, 1.0)
+    assert window[0].is_keyframe
+    assert window[0].data == bytes([1])  # KF anterior, no el de dentro
+
+
+def test_snapshot_preceding_kf_no_keyframe_at_all() -> None:
+    """Sin ningún KF en el búfer, devuelve el rango sin más (último recurso)."""
+    buf = PacketCircularBuffer(max_duration_seconds=30.0)
+    mono = time.monotonic()
+    for i in range(5):
+        buf.append(
+            RawPacket(
+                data=bytes([i]),
+                pts=i,
+                dts=i,
+                is_keyframe=False,
+                captured_at=mono - 4 + i,
+            )
+        )
+    window = buf.snapshot_from_preceding_keyframe(3.0, 1.0)
+    assert len(window) >= 1
+    assert not window[0].is_keyframe
+
+
 def test_parse_annke_query() -> None:
     start, end = parse_playback_query_string(
         "starttime=2026-05-23T21%3A05%3A11Z&endtime=2026-05-23T21%3A05%3A41Z",

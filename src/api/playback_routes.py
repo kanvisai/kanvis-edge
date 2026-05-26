@@ -88,7 +88,6 @@ async def internal_rtsp_playback(
         )
 
     depth = camera.effective_buffer_duration(settings.buffer_duration_seconds)
-    from src.ingestion.packet_decode import trim_packets_from_keyframe
     from src.playback.window import plan_playback_window
 
     try:
@@ -96,11 +95,9 @@ async def internal_rtsp_playback(
             start=start, end=end, buffer_depth_sec=depth
         )
         if plan.needs_buffer:
-            packets = trim_packets_from_keyframe(
-                buffer.snapshot_between_ages(
-                    plan.buffer_start_sec_ago,
-                    plan.buffer_end_sec_ago,
-                )
+            packets = buffer.snapshot_from_preceding_keyframe(
+                plan.buffer_start_sec_ago,
+                plan.buffer_end_sec_ago,
             )
             if not packets:
                 raise PlaybackStreamError(
