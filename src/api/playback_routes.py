@@ -64,6 +64,13 @@ async def internal_rtsp_playback(
         )
     require_operating_now(schedule_svc)
 
+    logger.info(
+        "Playback request: mtx_path=%s query=%s full_url=%s",
+        mtx_path,
+        mtx_query or str(request.query_params),
+        str(request.url),
+    )
+
     cameras = await repository.list_all()
     camera = find_camera_for_gateway_path(mtx_path, cameras, settings)
     if camera is None:

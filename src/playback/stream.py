@@ -153,6 +153,20 @@ async def stream_playback_h264(
     fps = max(1, camera.source.fps)
     frame_interval = 1.0 / fps
 
+    logger.info(
+        "Playback %s: start=%s end=%s depth=%.1fs codec=%s fps=%d "
+        "plan(buffer=%s live=%s camera=%s)",
+        camera.camera_id,
+        start.isoformat() if hasattr(start, "isoformat") else start,
+        end.isoformat() if hasattr(end, "isoformat") else end,
+        depth,
+        codec,
+        fps,
+        plan.needs_buffer,
+        plan.needs_live_tail,
+        plan.needs_camera,
+    )
+
     extradata = consumer.video_extradata
     sps_pps_emitted = False
     last_buffer_ts: float = 0.0
