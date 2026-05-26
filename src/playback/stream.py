@@ -19,6 +19,7 @@ from src.ingestion.packet_decode import (
     h264_avcc_extradata_from_keyframe,
     iter_annex_b_nals,
     to_annex_b,
+    trim_packets_from_keyframe,
 )
 from src.brands import load_brand_profile
 from src.brands.registry import default_brands_dir
@@ -156,38 +157,36 @@ async def stream_playback_h264(
 
     extradata = consumer.video_extradata
     sps_pps_emitted = False
+    last_buffer_ts: float = 0.0
 
     if plan.needs_buffer:
-        packets = buffer.snapshot_from_preceding_keyframe(
+        raw_snap = buffer.snapshot_between_ages(
             plan.buffer_start_sec_ago,
             plan.buffer_end_sec_ago,
         )
+        packets = trim_packets_from_keyframe(raw_snap)
         if not packets:
             raise PlaybackStreamError(
                 f"Búfer insuficiente para {plan.buffer_start_sec_ago:.1f}s; "
                 "activa ingesta y espera a que se llene"
             )
-        if not packets[0].is_keyframe:
-            logger.warning(
-                "Playback %s: sin keyframe previo en el búfer, "
-                "posibles artefactos al inicio",
-                camera.camera_id,
-            )
+        skipped = len(raw_snap) - len(packets)
         logger.info(
             "Playback %s: búfer %.1fs (%.1f→%.1fs atrás), %d paquetes "
-            "(inicio en keyframe=%s)",
+            "(descartados %d pre-keyframe, burst mode)",
             camera.camera_id,
             plan.buffer_start_sec_ago - plan.buffer_end_sec_ago,
             plan.buffer_start_sec_ago,
             plan.buffer_end_sec_ago,
             len(packets),
-            packets[0].is_keyframe if packets else False,
+            skipped,
         )
         sps_pps = _ensure_sps_pps(extradata, packets, codec)
         if sps_pps:
             yield sps_pps
             sps_pps_emitted = True
-        async for chunk in _emit_packets_realtime(packets, codec, frame_interval):
+        last_buffer_ts = packets[-1].captured_at
+        async for chunk in _emit_buffer_burst(packets, codec):
             yield chunk
 
     if plan.needs_live_tail:
@@ -196,15 +195,19 @@ async def stream_playback_h264(
             if sps_pps:
                 yield sps_pps
                 sps_pps_emitted = True
-        dropped = await consumer.purge_live_queue_older_than(time.monotonic() - 0.5)
+        if last_buffer_ts > 0:
+            cutoff = last_buffer_ts
+        else:
+            cutoff = time.monotonic() - 0.5
+        dropped = await consumer.purge_live_queue_older_than(cutoff)
         if dropped:
             logger.info(
-                "Playback %s: descartados %d paquetes vivos obsoletos antes del directo",
+                "Playback %s: descartados %d paquetes vivos pre-búfer al entrar en live tail",
                 camera.camera_id,
                 dropped,
             )
         logger.info(
-            "Playback %s: cola en vivo %.1fs hasta %s",
+            "Playback %s: live tail %.1fs hasta %s",
             camera.camera_id,
             plan.live_tail_sec,
             plan.end.isoformat(),
@@ -248,19 +251,23 @@ async def stream_playback_h264(
         )
 
 
-async def _emit_packets_realtime(
+async def _emit_buffer_burst(
     packets: list[RawPacket],
     codec: str,
-    frame_interval: float,
 ) -> AsyncIterator[bytes]:
-    """Emite paquetes usando tiempos de captura reales para pacing correcto."""
+    """
+    Emite paquetes del buffer lo más rápido posible (sin pacing real-time).
+
+    El burst minimiza el gap con el live tail: si pacemos a velocidad real,
+    durante la emisión se acumulan paquetes vivos que luego se pierden.
+    FFmpeg (-f h264) asigna PTS secuenciales por frame, así que el stream
+    RTSP resultante tiene PTS continuos independientemente de la velocidad
+    de llegada.
+    """
     for i, packet in enumerate(packets):
         yield to_annex_b(packet.data, codec)
-        if i + 1 < len(packets):
-            next_pkt = packets[i + 1]
-            delta = next_pkt.captured_at - packet.captured_at
-            sleep_time = max(0.001, min(delta, frame_interval * 3))
-            await asyncio.sleep(sleep_time)
+        if (i + 1) % 60 == 0:
+            await asyncio.sleep(0)
 
 
 async def _emit_live_until(
@@ -270,16 +277,11 @@ async def _emit_live_until(
     deadline_mono: float,
     wait_for_keyframe: bool = False,
 ) -> AsyncIterator[bytes]:
-    """Emite paquetes en vivo hasta el deadline. Si wait_for_keyframe=True,
-    descarta P-frames hasta recibir el primer keyframe."""
     waiting_kf = wait_for_keyframe
     while time.monotonic() < deadline_mono:
         packet = await consumer.get_live_packet(timeout=0.5)
         if packet is None:
             await asyncio.sleep(0.01)
-            continue
-        age = time.monotonic() - packet.captured_at
-        if age > _LIVE_STALE_MAX_SEC:
             continue
         if waiting_kf:
             if not packet.is_keyframe:
