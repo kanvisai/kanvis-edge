@@ -40,3 +40,25 @@ def test_trim_from_keyframe():
     trimmed = trim_packets_from_keyframe(packets)
     assert len(trimmed) == 2
     assert trimmed[0].is_keyframe
+
+
+def test_trim_from_keyframe_no_keyframe_returns_empty():
+    packets = [
+        RawPacket(data=b"\x00\x00\x00\x01\x41\xff", pts=0, dts=0, is_keyframe=False),
+        RawPacket(data=b"\x00\x00\x00\x01\x41\xff", pts=1, dts=1, is_keyframe=False),
+    ]
+    trimmed = trim_packets_from_keyframe(packets)
+    assert trimmed == []
+
+
+def test_trim_from_keyframe_nal_idr_fallback():
+    """Si is_keyframe=False pero el NAL es IDR (tipo 5), detectarlo."""
+    idr_data = b"\x00\x00\x00\x01\x65\xff\xfe"
+    packets = [
+        RawPacket(data=b"\x00\x00\x00\x01\x41\xff", pts=0, dts=0, is_keyframe=False),
+        RawPacket(data=idr_data, pts=1, dts=1, is_keyframe=False),
+        RawPacket(data=b"\x00\x00\x00\x01\x41\xff", pts=2, dts=2, is_keyframe=False),
+    ]
+    trimmed = trim_packets_from_keyframe(packets)
+    assert len(trimmed) == 2
+    assert trimmed[0].data == idr_data

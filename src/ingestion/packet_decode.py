@@ -127,7 +127,14 @@ def trim_packets_from_keyframe(packets: list[RawPacket]) -> list[RawPacket]:
     for i, pkt in enumerate(packets):
         if pkt.is_keyframe:
             return packets[i:]
-    return packets
+    if not packets:
+        return []
+    for i, pkt in enumerate(packets):
+        annex = to_annex_b(pkt.data, "h264")
+        for nal in iter_annex_b_nals(annex):
+            if nal and (nal[0] & 0x1F) == 5:
+                return packets[i:]
+    return []
 
 
 def open_decoder(codec_name: str, extradata: bytes | None = None) -> av.codec.context.CodecContext | None:

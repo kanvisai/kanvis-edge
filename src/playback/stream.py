@@ -181,20 +181,24 @@ async def stream_playback_h264(
             len(packets),
             skipped,
         )
+
         sps_pps = _ensure_sps_pps(extradata, packets, codec)
+        first_frame = to_annex_b(packets[0].data, codec)
         if sps_pps:
-            yield sps_pps
+            yield sps_pps + first_frame
             sps_pps_emitted = True
+        else:
+            logger.warning(
+                "Playback %s: SPS/PPS no disponible, posibles frames verdes",
+                camera.camera_id,
+            )
+            yield first_frame
+
         last_buffer_ts = packets[-1].captured_at
-        async for chunk in _emit_buffer_burst(packets, codec):
+        async for chunk in _emit_buffer_burst(packets[1:], codec):
             yield chunk
 
     if plan.needs_live_tail:
-        if not sps_pps_emitted:
-            sps_pps = _ensure_sps_pps(extradata, [], codec)
-            if sps_pps:
-                yield sps_pps
-                sps_pps_emitted = True
         if last_buffer_ts > 0:
             cutoff = last_buffer_ts
         else:
@@ -214,7 +218,9 @@ async def stream_playback_h264(
         )
         deadline = time.monotonic() + plan.live_tail_sec
         async for chunk in _emit_live_until(
-            consumer, codec, frame_interval, deadline, not sps_pps_emitted
+            consumer, codec, frame_interval, deadline,
+            wait_for_keyframe=not sps_pps_emitted,
+            extradata=extradata,
         ):
             yield chunk
 
@@ -275,7 +281,9 @@ async def _emit_live_until(
     codec: str,
     frame_interval: float,
     deadline_mono: float,
+    *,
     wait_for_keyframe: bool = False,
+    extradata: bytes | None = None,
 ) -> AsyncIterator[bytes]:
     waiting_kf = wait_for_keyframe
     while time.monotonic() < deadline_mono:
@@ -287,6 +295,14 @@ async def _emit_live_until(
             if not packet.is_keyframe:
                 continue
             waiting_kf = False
+            sps_pps = _ensure_sps_pps(extradata, [packet], codec)
+            frame_data = to_annex_b(packet.data, codec)
+            if sps_pps:
+                yield sps_pps + frame_data
+            else:
+                yield frame_data
+            await asyncio.sleep(frame_interval * 0.85)
+            continue
         yield to_annex_b(packet.data, codec)
         await asyncio.sleep(frame_interval * 0.85)
 
