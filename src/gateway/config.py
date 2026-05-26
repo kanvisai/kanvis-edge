@@ -40,7 +40,8 @@ def build_playback_run_on_demand(settings: AppSettings) -> str:
     return (
         f"{ff} -loglevel warning -nostdin "
         f"-fflags +nobuffer+fastseek -flags low_delay "
-        f"-probesize 4096 -analyzeduration 0 "
+        f"-probesize 32768 -analyzeduration 500000 "
+        f"-use_wallclock_as_timestamps 1 "
         f"-f h264 "
         f'-i "http://127.0.0.1:{api_port}/api/v1/internal/rtsp-playback'
         f'?mtx_path=$MTX_PATH&$MTX_QUERY" '

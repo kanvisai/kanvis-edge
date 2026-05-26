@@ -27,8 +27,6 @@ from src.playback.window import PlaybackPlan, plan_playback_window
 
 logger = logging.getLogger(__name__)
 
-_LIVE_STALE_MAX_SEC = 2.0
-
 _ANNEX_B_START = b"\x00\x00\x00\x01"
 
 
@@ -173,7 +171,7 @@ async def stream_playback_h264(
         skipped = len(raw_snap) - len(packets)
         logger.info(
             "Playback %s: búfer %.1fs (%.1f→%.1fs atrás), %d paquetes "
-            "(descartados %d pre-keyframe, burst mode)",
+            "(descartados %d pre-keyframe, realtime pacing)",
             camera.camera_id,
             plan.buffer_start_sec_ago - plan.buffer_end_sec_ago,
             plan.buffer_start_sec_ago,
@@ -195,7 +193,7 @@ async def stream_playback_h264(
             yield first_frame
 
         last_buffer_ts = packets[-1].captured_at
-        async for chunk in _emit_buffer_burst(packets[1:], codec):
+        async for chunk in _emit_buffer_realtime(packets[1:], codec):
             yield chunk
 
     if plan.needs_live_tail:
@@ -257,23 +255,27 @@ async def stream_playback_h264(
         )
 
 
-async def _emit_buffer_burst(
+async def _emit_buffer_realtime(
     packets: list[RawPacket],
     codec: str,
 ) -> AsyncIterator[bytes]:
     """
-    Emite paquetes del buffer lo más rápido posible (sin pacing real-time).
+    Emite paquetes del buffer a velocidad real (1x).
 
-    El burst minimiza el gap con el live tail: si pacemos a velocidad real,
-    durante la emisión se acumulan paquetes vivos que luego se pierden.
-    FFmpeg (-f h264) asigna PTS secuenciales por frame, así que el stream
-    RTSP resultante tiene PTS continuos independientemente de la velocidad
-    de llegada.
+    Con -use_wallclock_as_timestamps 1 en FFmpeg, los PTS se derivan del
+    reloj del sistema al leer cada frame. Emitir a 1x produce PTS que
+    reflejan la duración real del contenido — así el player lo reproduce
+    a velocidad normal y muestra timestamps correctos.
+
+    Durante la emisión del buffer se acumulan paquetes vivos en la cola,
+    pero el purge inteligente (cutoff = last_buffer_ts) los conserva y
+    la transición buffer → live es sin gap.
     """
     for i, packet in enumerate(packets):
         yield to_annex_b(packet.data, codec)
-        if (i + 1) % 60 == 0:
-            await asyncio.sleep(0)
+        if i + 1 < len(packets):
+            delta = packets[i + 1].captured_at - packet.captured_at
+            await asyncio.sleep(max(0.002, delta))
 
 
 async def _emit_live_until(
