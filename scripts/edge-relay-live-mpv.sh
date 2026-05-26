@@ -7,10 +7,10 @@
 
 set -euo pipefail
 
-EDGE_HOST="${EDGE_HOST:-192.168.1.100}"
+EDGE_HOST="${EDGE_HOST:-josafersl.ddns.net}"
 EDGE_PORT="${EDGE_PORT:-8554}"
-RTSP_USER="${RTSP_USER:-}"
-RTSP_PASS="${RTSP_PASS:-}"
+RTSP_USER="${RTSP_USER:-kanvis}"
+RTSP_PASS="${RTSP_PASS:-123456789aA%40}"
 RELAY_PATH="${RELAY_PATH:-cam-192-168-1-68-ch-stream1}"
 
 auth=""
