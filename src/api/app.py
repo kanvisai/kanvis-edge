@@ -73,6 +73,17 @@ async def lifespan(app: FastAPI):
 
     tasks.append(loop.create_task(_inventory_loop()))
 
+    async def _gateway_watchdog() -> None:
+        """Reinicia MediaMTX si el subproceso murió (sin reiniciar todo kanvis-edge)."""
+        while True:
+            await asyncio.sleep(15)
+            try:
+                await gateway_manager.ensure_mediamtx_running()
+            except Exception:
+                logger.exception("Watchdog RTSP gateway")
+
+    tasks.append(loop.create_task(_gateway_watchdog()))
+
     public_ip_service = PublicIpService(settings)
     app.state.public_ip_service = public_ip_service
     try:

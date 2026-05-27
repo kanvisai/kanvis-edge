@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Vivo RTSP rebroadcast (FFmpeg relay) — distinto del playback con búfer.
-# Ruta típica: /cam-<host>-ch-<canal> (la muestra el panel en «Broadcast RTSP»).
+# Vivo RTSP gateway (misma ruta que «Streaming/channels» en gateway/status).
+# No confundir con playback (Streaming/tracks + starttime/endtime).
 #
 # Uso:
-#   RELAY_PATH=cam-192-168-1-68-ch-stream1 ./scripts/edge-relay-live-mpv.sh
+#   ./scripts/edge-relay-live-mpv.sh
+#   CAMERA_PREFIX=cam-10-71-23-164-ch-101 ./scripts/edge-relay-live-mpv.sh
+#   RELAY_PATH=cam-01/Streaming/channels/101 ./scripts/edge-relay-live-mpv.sh
 
 set -euo pipefail
 
@@ -11,7 +13,9 @@ EDGE_HOST="${EDGE_HOST:-josafersl.ddns.net}"
 EDGE_PORT="${EDGE_PORT:-8554}"
 RTSP_USER="${RTSP_USER:-kanvis}"
 RTSP_PASS="${RTSP_PASS:-123456789aA%40}"
-RELAY_PATH="${RELAY_PATH:-cam-192-168-1-68-ch-stream1}"
+CAMERA_PREFIX="${CAMERA_PREFIX:-cam-01}"
+LIVE_CHANNEL="${LIVE_CHANNEL:-101}"
+RELAY_PATH="${RELAY_PATH:-${CAMERA_PREFIX}/Streaming/channels/${LIVE_CHANNEL}}"
 
 auth=""
 if [[ -n "${RTSP_USER}" ]]; then
@@ -25,5 +29,6 @@ fi
 URL="rtsp://${auth}${EDGE_HOST}:${EDGE_PORT}/${RELAY_PATH}"
 
 echo "Relay vivo: ${URL}"
-echo "Requiere broadcast RTSP activo y relay escuchando (ss -tlnp | grep ${EDGE_PORT})"
-exec mpv --rtsp-transport=tcp --no-audio "${URL}"
+echo "Puerto por defecto ${EDGE_PORT} (si falla, prueba EDGE_PORT=55422 según gateway/status)"
+echo "Requiere broadcast activo y gateway running (curl gateway/status)"
+exec mpv --rtsp-transport=tcp --no-audio -- "${URL}"

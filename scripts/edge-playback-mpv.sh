@@ -20,7 +20,7 @@
 set -euo pipefail
 
 EDGE_HOST="${EDGE_HOST:-josafersl.ddns.net}"
-EDGE_PORT="${EDGE_PORT:-8554}" 
+EDGE_PORT="${EDGE_PORT:-8554}"
 RTSP_USER="${RTSP_USER:-kanvis}"
 RTSP_PASS="${RTSP_PASS:-123456789aA%40}"
 CAMERA_PREFIX="${CAMERA_PREFIX:-cam-01}"
@@ -86,4 +86,4 @@ echo "En el edge: gateway/status → running:true y broadcast activo"
 echo ""
 echo "Lanzando MPV (RTSP-TCP, sin audio)..."
 
-exec mpv --rtsp-transport=tcp --no-audio "${URL}"
+exec mpv --rtsp-transport=tcp --no-audio -- "${URL}"

@@ -74,6 +74,45 @@ class GatewayManager:
     def _is_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
+    @property
+    def mediamtx_running(self) -> bool:
+        """True si el subproceso MediaMTX sigue vivo."""
+        return self._is_running()
+
+    def _record_mediamtx_exit(self) -> None:
+        """Si MediaMTX terminó, guarda stderr y limpia el handle."""
+        if self._proc is None:
+            return
+        code = self._proc.poll()
+        if code is None:
+            return
+        err_tail = b""
+        if self._proc.stderr:
+            try:
+                err_tail = self._proc.stderr.read()[-800:]
+            except OSError:
+                pass
+        self._last_error = (
+            f"MediaMTX terminó (exit={code}): "
+            f"{err_tail.decode('utf-8', errors='replace').strip() or 'sin stderr'}"
+        )
+        logger.error("RTSP gateway: %s", self._last_error)
+        self._proc = None
+
+    async def ensure_mediamtx_running(self) -> None:
+        """
+        Comprueba MediaMTX y lo vuelve a levantar si murió.
+
+        Llamado por el watchdog periódico (más rápido que el inventario cada 30s).
+        """
+        if not self.is_enabled:
+            return
+        self._record_mediamtx_exit()
+        if self._is_running():
+            return
+        logger.warning("MediaMTX no está en ejecución; reintentando arranque…")
+        await self.sync_from_repository()
+
     async def sync_from_repository(self) -> None:
         if not self.is_enabled:
             await self.shutdown()
@@ -100,6 +139,7 @@ class GatewayManager:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
             self.config_path.write_text(render_mediamtx_yaml(config), encoding="utf-8")
 
+            self._record_mediamtx_exit()
             if sig == self._config_sig and self._is_running():
                 return
 

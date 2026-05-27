@@ -58,4 +58,4 @@ echo "========================================="
 echo ""
 echo "Lanzando MPV (RTSP-TCP, sin audio)..."
 
-exec mpv --rtsp-transport=tcp --no-audio "${URL}"
+exec mpv --rtsp-transport=tcp --no-audio -- "${URL}"
