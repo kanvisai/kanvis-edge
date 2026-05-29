@@ -1,4 +1,4 @@
-"""Orquestaci?n del proceso MediaMTX (RTSP gateway opcional)."""
+"""Orquestacion del proceso MediaMTX (RTSP gateway opcional)."""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ class GatewayManager:
         return self._is_running()
 
     def _record_mediamtx_exit(self) -> None:
-        """Si MediaMTX termin?, guarda stderr y limpia el handle."""
+        """Si MediaMTX termino, guarda stderr y limpia el handle."""
         if self._proc is None:
             return
         code = self._proc.poll()
@@ -95,7 +95,7 @@ class GatewayManager:
             except OSError:
                 pass
         self._last_error = (
-            f"MediaMTX termin? (exit={code}): "
+            f"MediaMTX termino (exit={code}): "
             f"{err_tail.decode('utf-8', errors='replace').strip() or 'sin stderr'}"
         )
         logger.error("RTSP gateway: %s", self._last_error)
@@ -103,16 +103,16 @@ class GatewayManager:
 
     async def ensure_mediamtx_running(self) -> None:
         """
-        Comprueba MediaMTX y lo vuelve a levantar si muri?.
+        Comprueba MediaMTX y lo vuelve a levantar si murio.
 
-        Llamado por el watchdog peri?dico (m?s r?pido que el inventario cada 30s).
+        Llamado por el watchdog periodico (mas rapido que el inventario cada 30s).
         """
         if not self.is_enabled:
             return
         self._record_mediamtx_exit()
         if self._is_running():
             return
-        logger.warning("MediaMTX no est? en ejecuci?n; reintentando arranqueÿÿÿ")
+        logger.warning("MediaMTX no esta en ejecucion; reintentando arranque")
         await self.sync_from_repository()
 
     async def restart_mediamtx_scheduled(self) -> None:
@@ -148,7 +148,7 @@ class GatewayManager:
                 await self._shutdown_unlocked()
                 self._config_sig = sig
                 self._last_error = None
-                logger.info("RTSP gateway: sin c?maras con gateway.enabled")
+                logger.info("RTSP gateway: sin camaras con gateway.enabled")
                 return
 
             binary = self._resolve_binary()
@@ -177,7 +177,7 @@ class GatewayManager:
                     if self._proc.stderr:
                         err_tail = self._proc.stderr.read()[-800:]
                     self._last_error = (
-                        f"MediaMTX termin? al arrancar (exit={self._proc.returncode}): "
+                        f"MediaMTX termino al arrancar (exit={self._proc.returncode}): "
                         f"{err_tail.decode('utf-8', errors='replace').strip() or 'sin stderr'}"
                     )
                     self._proc = None
