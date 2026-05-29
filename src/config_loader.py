@@ -64,6 +64,29 @@ class AppSettings(BaseSettings):
     mediamtx_binary: str = Field(default="mediamtx", alias="MEDIAMTX_BINARY")
     mediamtx_config_path: Path | None = Field(default=None, alias="MEDIAMTX_CONFIG_PATH")
     mediamtx_log_level: str = Field(default="info", alias="MEDIAMTX_LOG_LEVEL")
+    mediamtx_restart_interval_sec: float = Field(
+        default=0.0,
+        alias="MEDIAMTX_RESTART_INTERVAL_SEC",
+        description=(
+            "Reinicio preventivo de MediaMTX cada N segundos (0=desactivado). "
+            "Preferible dejar en 0 y usar el watchdog; si hace falta, 21600 (6h) suele bastar."
+        ),
+    )
+    ingest_stale_timeout_sec: float = Field(
+        default=60.0,
+        alias="INGEST_STALE_TIMEOUT_SEC",
+        description="Sin paquetes RTSP durante N s → reinicio del consumer de esa cámara",
+    )
+    ingest_maintain_interval_sec: float = Field(
+        default=60.0,
+        alias="INGEST_MAINTAIN_INTERVAL_SEC",
+        description="Intervalo del watchdog de ingesta y cola viva",
+    )
+    live_queue_trim_sec: float = Field(
+        default=120.0,
+        alias="LIVE_QUEUE_TRIM_SEC",
+        description="En mantenimiento, conservar solo los últimos N s en la cola viva",
+    )
 
     # WebRTC (reservado Fase 2)
     webrtc_signaling_port: int = Field(default=8188, alias="WEBRTC_SIGNALING_PORT")
@@ -240,6 +263,10 @@ _YAML_ENV_MAP: dict[tuple[str, str], str] = {
     ("rtsp_gateway", "rtsp_gateway_wan_port"): "RTSP_GATEWAY_WAN_PORT",
     ("rtsp_gateway", "mediamtx_binary"): "MEDIAMTX_BINARY",
     ("rtsp_gateway", "mediamtx_log_level"): "MEDIAMTX_LOG_LEVEL",
+    ("rtsp_gateway", "mediamtx_restart_interval_sec"): "MEDIAMTX_RESTART_INTERVAL_SEC",
+    ("rtsp_client", "ingest_stale_timeout_sec"): "INGEST_STALE_TIMEOUT_SEC",
+    ("rtsp_client", "ingest_maintain_interval_sec"): "INGEST_MAINTAIN_INTERVAL_SEC",
+    ("rtsp_client", "live_queue_trim_sec"): "LIVE_QUEUE_TRIM_SEC",
     ("webrtc", "webrtc_signaling_port"): "WEBRTC_SIGNALING_PORT",
     ("inventory", "camera_store_backend"): "CAMERA_STORE_BACKEND",
     ("discovery", "discovery_enabled"): "DISCOVERY_ENABLED",

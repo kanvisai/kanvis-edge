@@ -1,4 +1,4 @@
-"""Orquestación del proceso MediaMTX (RTSP gateway opcional)."""
+"""Orquestaci?n del proceso MediaMTX (RTSP gateway opcional)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import logging
 import shutil
 import signal
 import subprocess
+import time
 from pathlib import Path
 
 from src.config_loader import AppSettings
@@ -29,6 +30,7 @@ class GatewayManager:
         self._proc: subprocess.Popen[bytes] | None = None
         self._config_sig: str = ""
         self._last_error: str | None = None
+        self._mediamtx_started_at: float = 0.0
         self._lock = asyncio.Lock()
 
     @property
@@ -80,7 +82,7 @@ class GatewayManager:
         return self._is_running()
 
     def _record_mediamtx_exit(self) -> None:
-        """Si MediaMTX terminó, guarda stderr y limpia el handle."""
+        """Si MediaMTX termin?, guarda stderr y limpia el handle."""
         if self._proc is None:
             return
         code = self._proc.poll()
@@ -93,7 +95,7 @@ class GatewayManager:
             except OSError:
                 pass
         self._last_error = (
-            f"MediaMTX terminó (exit={code}): "
+            f"MediaMTX termin? (exit={code}): "
             f"{err_tail.decode('utf-8', errors='replace').strip() or 'sin stderr'}"
         )
         logger.error("RTSP gateway: %s", self._last_error)
@@ -101,16 +103,35 @@ class GatewayManager:
 
     async def ensure_mediamtx_running(self) -> None:
         """
-        Comprueba MediaMTX y lo vuelve a levantar si murió.
+        Comprueba MediaMTX y lo vuelve a levantar si muri?.
 
-        Llamado por el watchdog periódico (más rápido que el inventario cada 30s).
+        Llamado por el watchdog peri?dico (m?s r?pido que el inventario cada 30s).
         """
         if not self.is_enabled:
             return
         self._record_mediamtx_exit()
         if self._is_running():
             return
-        logger.warning("MediaMTX no está en ejecución; reintentando arranque…")
+        logger.warning("MediaMTX no est? en ejecuci?n; reintentando arranque���")
+        await self.sync_from_repository()
+
+    async def restart_mediamtx_scheduled(self) -> None:
+        """Reinicio preventivo opcional (MEDIAMTX_RESTART_INTERVAL_SEC > 0)."""
+        interval = self._settings.mediamtx_restart_interval_sec
+        if interval <= 0 or not self.is_enabled:
+            return
+        self._record_mediamtx_exit()
+        if not self._is_running():
+            return
+        if time.monotonic() - self._mediamtx_started_at < interval:
+            return
+        logger.info(
+            "Reinicio programado de MediaMTX tras %.1f h (MEDIAMTX_RESTART_INTERVAL_SEC)",
+            interval / 3600.0,
+        )
+        async with self._lock:
+            await self._shutdown_unlocked()
+            self._config_sig = ""
         await self.sync_from_repository()
 
     async def sync_from_repository(self) -> None:
@@ -127,7 +148,7 @@ class GatewayManager:
                 await self._shutdown_unlocked()
                 self._config_sig = sig
                 self._last_error = None
-                logger.info("RTSP gateway: sin cámaras con gateway.enabled")
+                logger.info("RTSP gateway: sin c?maras con gateway.enabled")
                 return
 
             binary = self._resolve_binary()
@@ -156,7 +177,7 @@ class GatewayManager:
                     if self._proc.stderr:
                         err_tail = self._proc.stderr.read()[-800:]
                     self._last_error = (
-                        f"MediaMTX terminó al arrancar (exit={self._proc.returncode}): "
+                        f"MediaMTX termin? al arrancar (exit={self._proc.returncode}): "
                         f"{err_tail.decode('utf-8', errors='replace').strip() or 'sin stderr'}"
                     )
                     self._proc = None
@@ -164,6 +185,7 @@ class GatewayManager:
                     return
                 self._config_sig = sig
                 self._last_error = None
+                self._mediamtx_started_at = time.monotonic()
                 logger.info(
                     "RTSP gateway MediaMTX iniciado (pid=%s, puerto=%s, paths=%s)",
                     self._proc.pid,

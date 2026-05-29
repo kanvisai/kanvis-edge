@@ -79,10 +79,24 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(15)
             try:
                 await gateway_manager.ensure_mediamtx_running()
+                await gateway_manager.restart_mediamtx_scheduled()
             except Exception:
                 logger.exception("Watchdog RTSP gateway")
 
     tasks.append(loop.create_task(_gateway_watchdog()))
+
+    maintain_interval = max(30.0, settings.ingest_maintain_interval_sec)
+
+    async def _ingest_watchdog() -> None:
+        """Reinicia ingesta zombie y recorta colas vivas (playback tras muchas horas)."""
+        while True:
+            await asyncio.sleep(maintain_interval)
+            try:
+                await consumer_manager.maintain_ingest_health(loop)
+            except Exception:
+                logger.exception("Watchdog ingesta")
+
+    tasks.append(loop.create_task(_ingest_watchdog()))
 
     public_ip_service = PublicIpService(settings)
     app.state.public_ip_service = public_ip_service

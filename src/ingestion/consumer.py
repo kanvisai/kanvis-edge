@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING
 
 import av
@@ -72,12 +73,30 @@ class StreamConsumer:
         self._thread.start()
         logger.info("StreamConsumer iniciado: %s", self._camera.camera_id)
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
+        """Detiene el hilo de ingesta. False si el hilo no terminó a tiempo."""
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=10.0)
+            if self._thread.is_alive():
+                logger.warning(
+                    "StreamConsumer %s: hilo RTSP no terminó en 10s (conexión colgada)",
+                    self._camera.camera_id,
+                )
+                return False
             self._thread = None
         logger.info("StreamConsumer detenido: %s", self._camera.camera_id)
+        return True
+
+    def is_ingest_stale(self, max_idle_sec: float) -> bool:
+        """True si no llegan paquetes (conexión zombie)."""
+        snap = self.metrics.snapshot()
+        if not snap.get("connected"):
+            return True
+        idle = snap.get("last_packet_idle_sec")
+        if idle is None:
+            return True
+        return float(idle) > max_idle_sec
 
     def _push_live(self, packet: RawPacket) -> None:
         if self._loop is None or self._live_queue is None:
@@ -107,6 +126,9 @@ class StreamConsumer:
                     options={
                         "rtsp_transport": "tcp",
                         "stimeout": "5000000",
+                        # Evita lecturas RTSP colgadas indefinidamente (causa habitual
+                        # de playback roto tras horas sin reiniciar el servicio).
+                        "rw_timeout": "10000000",
                         "fflags": "nobuffer",
                         "flags": "low_delay",
                     },
@@ -196,6 +218,12 @@ class StreamConsumer:
             except asyncio.QueueFull:
                 break
         return dropped
+
+    async def trim_live_queue(self, keep_sec: float) -> int:
+        """Descarta paquetes en cola viva más antiguos que keep_sec."""
+        if keep_sec <= 0:
+            return 0
+        return await self.purge_live_queue_older_than(time.monotonic() - keep_sec)
 
 
 class StreamConsumerManager:
@@ -322,6 +350,56 @@ class StreamConsumerManager:
             except Exception:
                 logger.exception("Error sincronizando inventario de cámaras")
             await asyncio.sleep(30)
+
+    async def maintain_ingest_health(self, loop: asyncio.AbstractEventLoop) -> None:
+        """
+        Recuperación tras horas en marcha: reinicia consumers sin paquetes
+        y recorta colas vivas acumuladas.
+        """
+        max_idle = self._settings.ingest_stale_timeout_sec
+        trim_sec = self._settings.live_queue_trim_sec
+        stale_ids: list[str] = []
+
+        async with self._lock:
+            consumers = list(self._consumers.items())
+
+        for cam_id, consumer in consumers:
+            trimmed = await consumer.trim_live_queue(trim_sec)
+            if trimmed > 0:
+                logger.debug(
+                    "Cola viva %s: recortados %d paquetes (>%ds)",
+                    cam_id,
+                    trimmed,
+                    int(trim_sec),
+                )
+            if consumer.is_ingest_stale(max_idle):
+                stale_ids.append(cam_id)
+
+        for cam_id in stale_ids:
+            await self._restart_consumer(cam_id, loop)
+
+    async def _restart_consumer(
+        self,
+        camera_id: str,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        async with self._lock:
+            consumer = self._consumers.get(camera_id)
+            camera = self._cameras.get(camera_id)
+            buf = self._buffers.get(camera_id)
+            if consumer is None or camera is None or buf is None:
+                return
+            logger.warning(
+                "Ingesta estancada en %s (sin paquetes >%.0fs); reiniciando consumer",
+                camera_id,
+                self._settings.ingest_stale_timeout_sec,
+            )
+            if not consumer.stop():
+                return
+            new_consumer = StreamConsumer(camera, buf, self._settings)
+            new_consumer.bind_async_loop(loop)
+            new_consumer.start()
+            self._consumers[camera_id] = new_consumer
 
     def shutdown_all(self) -> None:
         for consumer in list(self._consumers.values()):
