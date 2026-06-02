@@ -11,6 +11,9 @@
       "rtsp": {
         "stream_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/{{channel}}",
         "playback_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/tracks/{{channel}}?starttime={{starttime}}&endtime={{endtime}}",
+        "time_format": "YYYY-MM-DDTHH:mm:ss[Z]",
+        "requires_utc": false,
+        "device_playback_supported": false,
         "note": "Las cámaras D-Link antiguas no soportan playback nativo por RTSP. Las grabaciones se consultan tradicionalmente por HTTP/FTP."
       }
     }
