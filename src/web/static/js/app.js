@@ -348,7 +348,7 @@ function buildCameraPayload(device, channel, label, opts = {}) {
       fps: 20,
       width: 1280,
       height: 720,
-      transport: "tcp",
+      transport: device.probeTransport || "tcp",
     },
     output: {
       protocol: broadcastOn ? (webrtcOn ? "webrtc" : "rtsp") : "none",
@@ -442,9 +442,16 @@ async function assertBroadcastScheduleOk() {
   }
 }
 
-async function probeDevice(device, channel) {
-  const ch = String(channel ?? device.probeChannel ?? "").trim() || "101";
-  device.probeChannel = ch;
+function isTransportError(message) {
+  const msg = String(message || "").toLowerCase();
+  return (
+    msg.includes("461") ||
+    msg.includes("unsupported transport") ||
+    msg.includes("protocol not supported")
+  );
+}
+
+async function probeDeviceWithTransport(device, ch, transport) {
   const body = {
     host: device.host.trim(),
     port: parseInt(device.port, 10) || 554,
@@ -452,7 +459,7 @@ async function probeDevice(device, channel) {
     password: device.password || "",
     brand: (device.brand || "").trim(),
     channel: ch,
-    transport: "tcp",
+    transport,
   };
   if (!body.brand) {
     throw new Error("Elige la marca (Annke, etc.) para armar la URL RTSP");
@@ -514,6 +521,25 @@ async function probeDevice(device, channel) {
   throw new Error(
     `${lastErr?.message || "Probe no disponible"}. Ejecuta: sudo ./scripts/deploy.sh --yes y Ctrl+F5. Health debe tener rtsp_probe_json: true`
   );
+}
+
+async function probeDevice(device, channel) {
+  const ch = String(channel ?? device.probeChannel ?? "").trim() || "101";
+  device.probeChannel = ch;
+
+  const transports = ["tcp", "udp"];
+  let lastErr;
+  for (const transport of transports) {
+    try {
+      const result = await probeDeviceWithTransport(device, ch, transport);
+      device.probeTransport = transport;
+      return result;
+    } catch (err) {
+      lastErr = err;
+      if (!isTransportError(err.message)) throw err;
+    }
+  }
+  throw lastErr;
 }
 
 function webrtcViewerHref(viewerUrl) {
