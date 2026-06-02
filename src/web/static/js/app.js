@@ -424,6 +424,7 @@ function probeResultFromJson(data) {
     recommendation: data.recommendation || "",
     hint: data.recommendation_label || "",
     resolution: data.resolution || "",
+    transport: data.transport || "",
     metaError: data.codec_detected
       ? ""
       : codecErr || "No se detectó códec (el vídeo RTSP sí responde).",
@@ -440,15 +441,6 @@ async function assertBroadcastScheduleOk() {
       `Fuera del horario operativo${when}. Pestaña Sistema → desmarca «Activar horario» o amplía las franjas → Guardar horario.`
     );
   }
-}
-
-function isTransportError(message) {
-  const msg = String(message || "").toLowerCase();
-  return (
-    msg.includes("461") ||
-    msg.includes("unsupported transport") ||
-    msg.includes("protocol not supported")
-  );
 }
 
 async function probeDeviceWithTransport(device, ch, transport) {
@@ -526,20 +518,9 @@ async function probeDeviceWithTransport(device, ch, transport) {
 async function probeDevice(device, channel) {
   const ch = String(channel ?? device.probeChannel ?? "").trim() || "101";
   device.probeChannel = ch;
-
-  const transports = ["tcp", "udp"];
-  let lastErr;
-  for (const transport of transports) {
-    try {
-      const result = await probeDeviceWithTransport(device, ch, transport);
-      device.probeTransport = transport;
-      return result;
-    } catch (err) {
-      lastErr = err;
-      if (!isTransportError(err.message)) throw err;
-    }
-  }
-  throw lastErr;
+  const result = await probeDeviceWithTransport(device, ch, "tcp");
+  if (result.transport) device.probeTransport = result.transport;
+  return result;
 }
 
 function webrtcViewerHref(viewerUrl) {

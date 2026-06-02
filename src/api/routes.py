@@ -349,6 +349,26 @@ def _probe_record_from_body(body: CameraProbeRequest) -> CameraRecord:
     )
 
 
+def _is_transport_error(message: str) -> bool:
+    """461/Unsupported Transport: la cámara rechaza el modo RTSP (TCP↔UDP)."""
+    m = (message or "").lower()
+    return (
+        "461" in m
+        or "unsupported transport" in m
+        or "protocol not supported" in m
+    )
+
+
+def _transport_candidates(requested: str) -> list[str]:
+    """Transporte pedido primero, luego el alternativo (cámaras antiguas: UDP)."""
+    req = (requested or "tcp").strip().lower() or "tcp"
+    order = [req]
+    for alt in ("tcp", "udp"):
+        if alt not in order:
+            order.append(alt)
+    return order
+
+
 async def _probe_rtsp_codec_meta(
     body: CameraProbeRequest,
     settings: AppSettings,
@@ -358,55 +378,68 @@ async def _probe_rtsp_codec_meta(
         url = record.rtsp_url(settings=settings)
     except (FileNotFoundError, ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    transport = record.source.transport or "tcp"
     tout = settings.snapshot_timeout_sec
-    try:
-        probe_info = await probe_rtsp_stream(
-            url,
-            ffmpeg_path=settings.ffmpeg_path,
-            transport=transport,
-            timeout_sec=tout,
-        )
-    except SnapshotError as exc:
+    probe_info = None
+    used_transport = record.source.transport or "tcp"
+    last_err = ""
+    for transport in _transport_candidates(record.source.transport):
+        try:
+            probe_info = await probe_rtsp_stream(
+                url,
+                ffmpeg_path=settings.ffmpeg_path,
+                transport=transport,
+                timeout_sec=tout,
+            )
+            used_transport = transport
+            break
+        except SnapshotError as exc:
+            last_err = str(exc)
+            if not _is_transport_error(last_err):
+                break
+        except Exception as exc:
+            logger.exception("probe-meta inesperado")
+            last_err = str(exc)
+            break
+    if probe_info is None:
         return {
             "ok": False,
             "codec_detected": False,
-            "error": str(exc),
-            "rtsp_url_masked": _mask_url(url),
-        }
-    except Exception as exc:
-        logger.exception("probe-meta inesperado")
-        return {
-            "ok": False,
-            "codec_detected": False,
-            "error": str(exc),
+            "error": last_err or "No se pudo analizar el RTSP",
             "rtsp_url_masked": _mask_url(url),
         }
     out = probe_info.as_dict()
     out["ok"] = True
     out["codec_detected"] = bool(probe_info.codec_name)
     out["rtsp_url_masked"] = _mask_url(url)
+    out["transport"] = used_transport
     return out
 
 
 async def _probe_rtsp_capture_jpeg(
     body: CameraProbeRequest,
     settings: AppSettings,
-) -> tuple[bytes, str]:
+) -> tuple[bytes, str, str]:
     record = _probe_record_from_body(body)
     try:
         url = record.rtsp_url(settings=settings)
     except (FileNotFoundError, ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    transport = record.source.transport or "tcp"
     tout = settings.snapshot_timeout_sec
-    jpeg = await capture_jpeg_from_rtsp(
-        url,
-        ffmpeg_path=settings.ffmpeg_path,
-        transport=transport,
-        timeout_sec=tout,
-    )
-    return jpeg, url
+    last_exc: SnapshotError | None = None
+    for transport in _transport_candidates(record.source.transport):
+        try:
+            jpeg = await capture_jpeg_from_rtsp(
+                url,
+                ffmpeg_path=settings.ffmpeg_path,
+                transport=transport,
+                timeout_sec=tout,
+            )
+            return jpeg, url, transport
+        except SnapshotError as exc:
+            last_exc = exc
+            if not _is_transport_error(str(exc)):
+                break
+    raise last_exc or SnapshotError("No se pudo capturar el RTSP")
 
 
 async def _probe_camera_rtsp_impl(
@@ -415,7 +448,7 @@ async def _probe_camera_rtsp_impl(
 ) -> Response:
     """Captura un frame JPEG desde RTSP (sin cabeceras de códec; evita HTTP 500)."""
     try:
-        jpeg, url = await _probe_rtsp_capture_jpeg(body, settings)
+        jpeg, url, _transport = await _probe_rtsp_capture_jpeg(body, settings)
     except HTTPException:
         raise
     except SnapshotError as exc:
@@ -440,40 +473,51 @@ async def _probe_camera_rtsp_json_impl(
         url = record.rtsp_url(settings=settings)
     except (FileNotFoundError, ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    transport = (body.transport or "tcp").strip()
     tout = settings.snapshot_timeout_sec
+
+    jpeg: bytes | None = None
+    used_transport = (body.transport or "tcp").strip().lower() or "tcp"
+    last_exc: SnapshotError | None = None
+    for transport in _transport_candidates(body.transport):
+        try:
+            jpeg = await capture_jpeg_from_rtsp(
+                url,
+                ffmpeg_path=settings.ffmpeg_path,
+                transport=transport,
+                timeout_sec=tout,
+            )
+            used_transport = transport
+            break
+        except SnapshotError as exc:
+            last_exc = exc
+            if not _is_transport_error(str(exc)):
+                break
+        except Exception as exc:
+            logger.exception("rtsp-probe-json falló")
+            raise HTTPException(status_code=502, detail=f"Probe RTSP: {exc}") from exc
+    if jpeg is None:
+        detail = str(last_exc) if last_exc else "No se pudo capturar el RTSP"
+        raise HTTPException(status_code=502, detail=detail)
+
     codec_error = ""
     probe_info = None
     try:
         probe_info = await probe_rtsp_stream(
             url,
             ffmpeg_path=settings.ffmpeg_path,
-            transport=transport,
+            transport=used_transport,
             timeout_sec=min(tout, 10.0),
         )
     except SnapshotError as exc:
         codec_error = str(exc)
         logger.info("Códec no detectado en probe: %s", exc)
-    try:
-        jpeg = await capture_jpeg_from_rtsp(
-            url,
-            ffmpeg_path=settings.ffmpeg_path,
-            transport=transport,
-            timeout_sec=tout,
-        )
-    except HTTPException:
-        raise
-    except SnapshotError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("rtsp-probe-json falló")
-        raise HTTPException(status_code=502, detail=f"Probe RTSP: {exc}") from exc
 
     out: dict = {
         "ok": True,
         "image_base64": base64.b64encode(jpeg).decode("ascii"),
         "content_type": "image/jpeg",
         "rtsp_url_masked": _mask_url(url),
+        "transport": used_transport,
         "codec_detected": bool(probe_info and probe_info.codec_name),
         "codec_error": codec_error,
     }
