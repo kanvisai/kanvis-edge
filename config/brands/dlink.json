@@ -1,0 +1,17 @@
+{
+    "brand": "D-Link",
+    "version": "1.0.0",
+    "models": ["Generic_Old_Models"],
+    "default_channels": [
+      { "id": "live1.sdp", "label": "Perfil Principal (H.264/MPEG4)" },
+      { "id": "live2.sdp", "label": "Perfil Secundario" },
+      { "id": "video.mp4", "label": "Alternativo MP4" }
+    ],
+    "protocols": {
+      "rtsp": {
+        "stream_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/{{channel}}",
+        "playback_template": "rtsp://{{user}}:{{password}}@{{host}}:{{port}}/tracks/{{channel}}?starttime={{starttime}}&endtime={{endtime}}",
+        "note": "Las cámaras D-Link antiguas no soportan playback nativo por RTSP. Las grabaciones se consultan tradicionalmente por HTTP/FTP."
+      }
+    }
+  }
