@@ -7,7 +7,9 @@ import logging
 import shutil
 import signal
 import subprocess
+import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from src.config_loader import AppSettings
@@ -21,6 +23,8 @@ from src.gateway.config import (
 )
 
 logger = logging.getLogger(__name__)
+# Logger dedicado para la salida cruda de MediaMTX/ffmpeg (runOnDemand).
+_MTX_LOGGER = logging.getLogger("mediamtx")
 
 
 class GatewayManager:
@@ -32,6 +36,9 @@ class GatewayManager:
         self._last_error: str | None = None
         self._mediamtx_started_at: float = 0.0
         self._lock = asyncio.Lock()
+        # Cola de líneas recientes de MediaMTX para diagnóstico al morir.
+        self._recent_output: deque[str] = deque(maxlen=80)
+        self._output_thread: threading.Thread | None = None
 
     @property
     def is_enabled(self) -> bool:
@@ -81,23 +88,55 @@ class GatewayManager:
         """True si el subproceso MediaMTX sigue vivo."""
         return self._is_running()
 
+    def _pump_output(self, proc: subprocess.Popen[bytes]) -> None:
+        """Lee la salida de MediaMTX línea a línea y la reenvía al logger."""
+        stream = proc.stdout
+        if stream is None:
+            return
+        try:
+            for raw in iter(stream.readline, b""):
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                if not line:
+                    continue
+                self._recent_output.append(line)
+                _MTX_LOGGER.info("%s", line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    def _start_output_pump(self, proc: subprocess.Popen[bytes]) -> None:
+        self._recent_output.clear()
+        thread = threading.Thread(
+            target=self._pump_output,
+            args=(proc,),
+            name="mediamtx-logs",
+            daemon=True,
+        )
+        self._output_thread = thread
+        thread.start()
+
+    def _join_output_thread(self) -> None:
+        thread = self._output_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+
+    def _recent_output_tail(self) -> str:
+        return "\n".join(list(self._recent_output)).strip()
+
     def _record_mediamtx_exit(self) -> None:
-        """Si MediaMTX termino, guarda stderr y limpia el handle."""
+        """Si MediaMTX termino, guarda las últimas líneas y limpia el handle."""
         if self._proc is None:
             return
         code = self._proc.poll()
         if code is None:
             return
-        err_tail = b""
-        if self._proc.stderr:
-            try:
-                err_tail = self._proc.stderr.read()[-800:]
-            except OSError:
-                pass
-        self._last_error = (
-            f"MediaMTX termino (exit={code}): "
-            f"{err_tail.decode('utf-8', errors='replace').strip() or 'sin stderr'}"
-        )
+        self._join_output_thread()
+        tail = self._recent_output_tail() or "sin salida"
+        self._last_error = f"MediaMTX termino (exit={code}): {tail[-800:]}"
         logger.error("RTSP gateway: %s", self._last_error)
         self._proc = None
 
@@ -168,17 +207,17 @@ class GatewayManager:
             try:
                 self._proc = subprocess.Popen(
                     [binary, str(self.config_path)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                 )
+                self._start_output_pump(self._proc)
                 await asyncio.sleep(0.4)
                 if self._proc.poll() is not None:
-                    err_tail = b""
-                    if self._proc.stderr:
-                        err_tail = self._proc.stderr.read()[-800:]
+                    self._join_output_thread()
+                    tail = self._recent_output_tail() or "sin salida"
                     self._last_error = (
                         f"MediaMTX termino al arrancar (exit={self._proc.returncode}): "
-                        f"{err_tail.decode('utf-8', errors='replace').strip() or 'sin stderr'}"
+                        f"{tail[-800:]}"
                     )
                     self._proc = None
                     logger.error("RTSP gateway: %s", self._last_error)
