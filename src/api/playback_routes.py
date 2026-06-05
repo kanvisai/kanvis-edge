@@ -74,6 +74,7 @@ async def internal_rtsp_playback(
     cameras = await repository.list_all()
     camera = find_camera_for_gateway_path(mtx_path, cameras, settings)
     if camera is None:
+        logger.warning("Playback 404: ruta RTSP desconocida mtx_path=%s", mtx_path)
         raise HTTPException(status_code=404, detail=f"Ruta RTSP desconocida: {mtx_path}")
 
     profile = brand_profile_for_camera(camera, settings)
@@ -86,6 +87,12 @@ async def internal_rtsp_playback(
     consumer = manager.get_consumer(camera.camera_id)
     buffer = manager.get_buffer(camera.camera_id)
     if consumer is None or buffer is None:
+        logger.warning(
+            "Playback 503 %s: ingesta/búfer no activos (consumer=%s buffer=%s)",
+            camera.camera_id,
+            consumer is not None,
+            buffer is not None,
+        )
         raise HTTPException(
             status_code=503,
             detail=(
@@ -93,6 +100,14 @@ async def internal_rtsp_playback(
                 "gateway con ingesta automática"
             ),
         )
+
+    logger.info(
+        "Playback %s salud: consumer_alive=%s buffer_packets=%d buffer_span=%.1fs",
+        camera.camera_id,
+        getattr(consumer, "is_running", "?"),
+        buffer.size(),
+        buffer.span_seconds(),
+    )
 
     depth = camera.effective_buffer_duration(settings.buffer_duration_seconds)
     from src.ingestion.packet_decode import trim_packets_from_keyframe
@@ -115,8 +130,10 @@ async def internal_rtsp_playback(
                     "activa ingesta y espera a que se llene"
                 )
     except ValueError as exc:
+        logger.warning("Playback 400 %s: %s", camera.camera_id, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PlaybackStreamError as exc:
+        logger.warning("Playback 503 %s: %s", camera.camera_id, exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     async def _body():
